@@ -21,6 +21,12 @@ interface TelemetryState {
   latency: number;
   isOnline: boolean;
   leakDetected: boolean;
+  detections: Array<{
+    id: number;
+    class: string;
+    confidence: number;
+    bbox: [number, number, number, number];
+  }>;
   
   // Actions
   updateTelemetry: (data: Partial<TelemetryState>) => void;
@@ -38,6 +44,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   latency: 12,
   isOnline: true,
   leakDetected: false,
+  detections: [],
   
   updateTelemetry: (data) => set((state) => ({ ...state, ...data })),
 }));

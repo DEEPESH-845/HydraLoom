@@ -57,7 +57,9 @@ export function SystemLogs() {
                 log.type === "WARN" ? "text-tactical-red" : "text-tactical-cyan/70"
               }`}
             >
-              <span className="opacity-50 mr-2">{new Date().toISOString().substring(11, 19)}</span>
+              <span className="opacity-50 mr-2" suppressHydrationWarning>
+                {new Date().toISOString().substring(11, 19)}
+              </span>
               {log.text}
             </motion.div>
           ))}

@@ -5,52 +5,64 @@ import { motion } from "framer-motion";
 
 export function DepthGauge() {
   const depth = useTelemetryStore((state) => state.depth);
+  const isOnline = useTelemetryStore((state) => state.isOnline);
 
-  // We map depth (0 to 100m) to a percentage for the visual bar
   const maxDepth = 100;
-  const depthPercent = Math.min((depth / maxDepth) * 100, 100);
+  const depthPercent = Math.min((Math.max(depth, 0) / maxDepth) * 100, 100);
+
+  const isCritical = depth > 80; // Warning threshold
 
   return (
-    <div className="relative flex flex-row items-center w-full h-full px-4 text-tactical-cyan">
+    <div className={`relative flex flex-row items-center w-full h-full px-4 ${!isOnline ? 'grayscale opacity-50' : ''}`}>
       
-      {/* Left side: The depth number readout */}
-      <div className="flex-1 flex flex-col items-center justify-center space-y-2">
-        <span className="text-3xl font-mono font-bold tracking-tighter drop-shadow-[0_0_8px_currentColor]">
+      {/* Readout Block */}
+      <div className="flex-1 flex flex-col items-center justify-center relative">
+        {/* Holographic glowing text */}
+        <span className={`text-4xl font-mono font-bold tracking-tighter ${isCritical ? 'text-tactical-red drop-shadow-[0_0_15px_rgba(255,0,0,0.8)]' : 'text-tactical-cyan drop-shadow-[0_0_15px_rgba(0,240,255,0.8)]'}`}>
           {depth.toFixed(1)}
         </span>
-        <span className="text-xs font-mono opacity-80 uppercase tracking-widest">
-          Meters
+        <span className="text-[10px] font-mono opacity-80 uppercase tracking-widest text-tactical-cyan/60 mt-1">
+          Meters (Sea)
         </span>
+        
+        {isCritical && (
+          <div className="absolute -bottom-6 text-[8px] font-mono text-tactical-red border border-tactical-red px-1 animate-pulse">
+            CRUSH_DEPTH_WARN
+          </div>
+        )}
       </div>
 
-      {/* Right side: The vertical tape gauge */}
-      <div className="relative w-12 h-full border-l-2 border-tactical-cyan/40 ml-4 overflow-hidden py-4">
+      {/* Holographic Depth Tape */}
+      <div className="relative w-16 h-[90%] border-l border-tactical-cyan/30 ml-4 overflow-hidden bg-tactical-cyan/5">
         
-        {/* Ticks representation */}
-        <div className="absolute top-0 bottom-0 left-0 w-full flex flex-col justify-between py-4">
-          {[0, 20, 40, 60, 80, 100].map((tick) => (
-            <div key={tick} className="flex items-center">
-              <div className="w-3 h-[2px] bg-tactical-cyan/60" />
-              <span className="text-[9px] font-mono ml-1 opacity-50">{tick}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* The moving cursor indicating current depth */}
-        <motion.div
-          className="absolute left-0 right-0 h-4 border-y-2 border-tactical-red bg-tactical-red/20 flex items-center justify-start z-10"
-          animate={{ top: `${depthPercent}%` }}
-          transition={{ type: "spring", stiffness: 80, damping: 20 }}
-          style={{ translateY: "-50%" }}
+        {/* Dynamic sliding tape */}
+        <motion.div 
+          className="absolute left-0 w-full"
+          animate={{ y: `-${depthPercent}%` }}
+          transition={{ type: "spring", stiffness: 100, damping: 20 }}
+          style={{ height: '200%', top: '50%' }} // Center point shifts
         >
-          <div className="w-4 h-[2px] bg-tactical-red" />
+          {Array.from({length: 11}).map((_, i) => {
+            const tickDepth = i * 10;
+            return (
+              <div key={i} className="absolute left-0 flex items-center" style={{ top: `${(i / 10) * 50}%` }}>
+                <div className={`w-4 h-[1px] ${tickDepth > 80 ? 'bg-tactical-red/80' : 'bg-tactical-cyan/60'}`} />
+                <span className={`text-[10px] font-mono ml-2 ${tickDepth > 80 ? 'text-tactical-red' : 'text-tactical-cyan/60'}`}>
+                  {tickDepth}
+                </span>
+              </div>
+            );
+          })}
         </motion.div>
 
-        {/* Fill from top to current depth */}
-        <motion.div 
-          className="absolute top-0 left-0 w-full bg-tactical-cyan/10"
-          animate={{ height: `${depthPercent}%` }}
-        />
+        {/* Center Target Indicator (Current Depth) */}
+        <div className="absolute top-1/2 left-0 w-full -translate-y-1/2 z-10 pointer-events-none">
+          <div className="flex items-center">
+             <div className="w-0 h-0 border-y-[4px] border-y-transparent border-l-[6px] border-l-tactical-red" />
+             <div className="flex-1 h-[1px] bg-tactical-red shadow-[0_0_10px_rgba(255,0,0,1)]" />
+          </div>
+        </div>
+
       </div>
 
     </div>

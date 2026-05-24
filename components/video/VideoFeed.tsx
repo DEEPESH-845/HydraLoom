@@ -9,6 +9,41 @@ import { AIDetectionOverlay } from "./AIDetectionOverlay";
 import { useTelemetryStore } from "@/lib/store/telemetryStore";
 import { motion } from "framer-motion";
 import { Vector2 } from "three";
+import { Glitch } from "@react-three/postprocessing";
+import { GlitchMode } from "postprocessing";
+
+const DynamicPostProcessing = () => {
+  const store = useTelemetryStore();
+  
+  // Calculate average thruster stress (0 to 1)
+  const stress = (Math.abs(store.thrusters.t1) + Math.abs(store.thrusters.t2) + Math.abs(store.thrusters.t3) + Math.abs(store.thrusters.t4)) / 400.0;
+  
+  // Base depth noise
+  const depthFactor = Math.min(store.depth / 100, 1.0);
+  
+  const isGlitching = !store.isOnline || stress > 0.8 || store.latency > 500;
+
+  return (
+    <EffectComposer>
+      <Noise opacity={0.15 + (depthFactor * 0.2) + (stress * 0.3)} blendFunction={BlendFunction.OVERLAY} />
+      <Vignette eskil={false} offset={0.3 + (depthFactor * 0.2)} darkness={0.8 + (depthFactor * 0.2)} />
+      <ChromaticAberration 
+        offset={new Vector2(0.002 + (stress * 0.01), 0.002 + (stress * 0.01))} 
+        blendFunction={BlendFunction.NORMAL} 
+        radialModulation={false} 
+        modulationOffset={0} 
+      />
+      <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} intensity={1.5} />
+      <Glitch 
+        delay={new Vector2(1.5, 3.5)} 
+        duration={new Vector2(0.1, 0.3)} 
+        strength={new Vector2(0.2, 0.4)} 
+        mode={GlitchMode.SPORADIC} 
+        active={isGlitching} 
+      />
+    </EffectComposer>
+  );
+};
 
 // A custom shader material that generates an animated underwater gradient if no video is available
 const UnderwaterBackground = () => {
@@ -84,13 +119,7 @@ export function VideoFeed() {
         <Canvas>
           <color attach="background" args={["#010508"]} />
           <UnderwaterBackground />
-          
-          <EffectComposer>
-            <Noise opacity={0.15} blendFunction={BlendFunction.OVERLAY} />
-            <Vignette eskil={false} offset={0.3} darkness={0.8} />
-            <ChromaticAberration offset={new Vector2(0.002, 0.002)} blendFunction={BlendFunction.NORMAL} radialModulation={false} modulationOffset={0} />
-            <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} intensity={1.5} />
-          </EffectComposer>
+          <DynamicPostProcessing />
         </Canvas>
       </div>
 
