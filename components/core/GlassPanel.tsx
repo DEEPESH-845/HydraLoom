@@ -16,7 +16,7 @@ export function GlassPanel({ title, className, children, ...props }: GlassPanelP
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: "spring", stiffness: 100, damping: 20 }}
       className={cn(
-        "glass-panel rounded-xl overflow-hidden flex flex-col h-full relative",
+        "glass-panel-advanced rounded-xl overflow-hidden flex flex-col h-full relative",
         className
       )}
       {...props}

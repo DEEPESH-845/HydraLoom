@@ -1,77 +1,100 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useSpring, useMotionValue, useTransform } from "framer-motion";
 import { useEffect, useState } from "react";
+import { useTelemetryStore } from "@/lib/store/telemetryStore";
 
 interface Detection {
   id: string;
   label: string;
   confidence: number;
-  x: number;
+  x: number; // percentage 0-100
   y: number;
   width: number;
   height: number;
+  isCritical: boolean;
+}
+
+// Mechanically stabilized tracking box
+function TrackingBox({ detection }: { detection: Detection }) {
+  // Use Framer Motion Springs to simulate mechanical stabilization / Kalman filter delay
+  const springConfig = { stiffness: 120, damping: 20, mass: 1 };
+  
+  const xSpring = useSpring(detection.x, springConfig);
+  const ySpring = useSpring(detection.y, springConfig);
+  const wSpring = useSpring(detection.width, springConfig);
+  const hSpring = useSpring(detection.height, springConfig);
+
+  useEffect(() => {
+    xSpring.set(detection.x);
+    ySpring.set(detection.y);
+    wSpring.set(detection.width);
+    hSpring.set(detection.height);
+  }, [detection, xSpring, ySpring, wSpring, hSpring]);
+
+  const left = useTransform(xSpring, (v) => `${v}%`);
+  const top = useTransform(ySpring, (v) => `${v}%`);
+  const width = useTransform(wSpring, (v) => `${v}%`);
+  const height = useTransform(hSpring, (v) => `${v}%`);
+
+  const color = detection.isCritical ? "border-tactical-red" : "border-tactical-cyan";
+  const glow = detection.isCritical 
+    ? "shadow-[0_0_15px_rgba(255,42,42,0.6)]" 
+    : "shadow-[0_0_15px_rgba(0,240,255,0.4)]";
+  const bgColor = detection.isCritical ? "bg-tactical-red/10" : "bg-tactical-cyan/5";
+
+  return (
+    <motion.div
+      className={`absolute ${color} ${bgColor} flex flex-col justify-start pointer-events-none`}
+      style={{ left, top, width, height }}
+    >
+      {/* Tactical Corners */}
+      <div className={`absolute -top-1 -left-1 w-3 h-3 border-t-2 border-l-2 ${color} ${glow}`} />
+      <div className={`absolute -top-1 -right-1 w-3 h-3 border-t-2 border-r-2 ${color} ${glow}`} />
+      <div className={`absolute -bottom-1 -left-1 w-3 h-3 border-b-2 border-l-2 ${color} ${glow}`} />
+      <div className={`absolute -bottom-1 -right-1 w-3 h-3 border-b-2 border-r-2 ${color} ${glow}`} />
+
+      {/* Crosshair Projection */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full border border-white/50" />
+
+      {/* Label Box */}
+      <div className={`absolute -top-7 left-0 ${detection.isCritical ? "bg-tactical-red/20 border-tactical-red/50" : "bg-tactical-cyan/20 border-tactical-cyan/50"} border px-2 py-0.5 whitespace-nowrap backdrop-blur-sm`}>
+        <span className="text-[10px] font-mono text-white font-bold tracking-widest drop-shadow-md uppercase">
+          {detection.label} <span className="opacity-70 ml-1">{(detection.confidence * 100).toFixed(0)}%</span>
+        </span>
+      </div>
+      
+      {/* Trajectory Vector line */}
+      <div className={`absolute bottom-0 left-1/2 w-[1px] h-12 ${detection.isCritical ? "bg-gradient-to-b from-tactical-red/80 to-transparent" : "bg-gradient-to-b from-tactical-cyan/80 to-transparent"} origin-top opacity-50`} />
+    </motion.div>
+  );
 }
 
 export function AIDetectionOverlay() {
   const [detections, setDetections] = useState<Detection[]>([
-    { id: "1", label: "Corrosion", confidence: 0.94, x: 30, y: 40, width: 15, height: 20 },
-    { id: "2", label: "Pipe", confidence: 0.88, x: 60, y: 55, width: 25, height: 10 },
+    { id: "1", label: "Struct_Crack", confidence: 0.94, x: 30, y: 40, width: 12, height: 18, isCritical: true },
+    { id: "2", label: "Pipeline_B", confidence: 0.88, x: 60, y: 55, width: 20, height: 10, isCritical: false },
   ]);
 
-  // Simulate AI tracking jitter
+  // Simulate raw, noisy AI pipeline output
   useEffect(() => {
-    let animationFrameId: number;
-    let lastTime = performance.now();
-
-    const animate = (time: number) => {
-      if (time - lastTime > 100) {
-        lastTime = time;
-        setDetections((prev) =>
-          prev.map((d) => ({
-            ...d,
-            x: d.x + (Math.random() - 0.5) * 0.5,
-            y: d.y + (Math.random() - 0.5) * 0.5,
-            width: d.width + (Math.random() - 0.5) * 0.2,
-            height: d.height + (Math.random() - 0.5) * 0.2,
-          }))
-        );
-      }
-      animationFrameId = requestAnimationFrame(animate);
-    };
-
-    animationFrameId = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrameId);
+    const interval = setInterval(() => {
+      setDetections((prev) =>
+        prev.map((d) => ({
+          ...d,
+          // Inject raw noise. The TrackingBox spring will smooth this out.
+          x: d.x + (Math.random() - 0.5) * 2,
+          y: d.y + (Math.random() - 0.5) * 2,
+        }))
+      );
+    }, 150); // AI inference running at ~6.6 FPS
+    return () => clearInterval(interval);
   }, []);
 
   return (
-    <div className="absolute inset-0 pointer-events-none">
+    <div className="absolute inset-0 pointer-events-none z-30">
       {detections.map((d) => (
-        <motion.div
-          key={d.id}
-          className="absolute border border-tactical-red/80 bg-tactical-red/5 flex flex-col justify-start"
-          style={{
-            left: `${d.x}%`,
-            top: `${d.y}%`,
-            width: `${d.width}%`,
-            height: `${d.height}%`,
-          }}
-          layout
-          transition={{ type: "tween", ease: "linear", duration: 0.1 }}
-        >
-          {/* Tracking Corners */}
-          <div className="absolute -top-1 -left-1 w-2 h-2 border-t-2 border-l-2 border-tactical-red" />
-          <div className="absolute -top-1 -right-1 w-2 h-2 border-t-2 border-r-2 border-tactical-red" />
-          <div className="absolute -bottom-1 -left-1 w-2 h-2 border-b-2 border-l-2 border-tactical-red" />
-          <div className="absolute -bottom-1 -right-1 w-2 h-2 border-b-2 border-r-2 border-tactical-red" />
-
-          {/* Label */}
-          <div className="absolute -top-6 left-0 bg-tactical-red/20 border border-tactical-red/50 px-1 py-0.5 whitespace-nowrap">
-            <span className="text-[10px] font-mono text-white font-bold tracking-wider drop-shadow-md">
-              {d.label} {(d.confidence * 100).toFixed(0)}%
-            </span>
-          </div>
-        </motion.div>
+        <TrackingBox key={d.id} detection={d} />
       ))}
     </div>
   );
