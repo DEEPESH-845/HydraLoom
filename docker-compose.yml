@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  hydraloom-edge:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hydraloom-edge
+    restart: unless-stopped
+    network_mode: "host" # Required for low-latency UDP GStreamer and hardware UART access
+    devices:
+      - "/dev/video0:/dev/video0" # USB Camera
+      - "/dev/ttyAMA0:/dev/ttyAMA0" # UART Serial to FRDM MCU
+    environment:
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
