@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTelemetryStore } from "@/lib/store/telemetryStore";
 
 const MOCK_LOGS = [
   "[INFO] Thruster calibration stable",
@@ -29,18 +30,45 @@ export function SystemLogs() {
 
   useEffect(() => {
     let idCounter = 2;
+    
+    // Add periodic mock logs just to keep it alive
     const interval = setInterval(() => {
       const randomLog = MOCK_LOGS[Math.floor(Math.random() * MOCK_LOGS.length)];
-      const type: "WARN" | "INFO" = randomLog.includes("[WARN]") ? "WARN" : "INFO";
-      
       setLogs((prev) => {
-        const newLogs = [...prev, { id: idCounter++, text: randomLog, type }];
-        if (newLogs.length > 15) newLogs.shift();
+        const newLogs = [...prev, { id: idCounter++, text: randomLog, type: "INFO" as const }];
+        if (newLogs.length > 20) newLogs.shift();
         return newLogs;
       });
-    }, 3500);
+    }, 4500);
 
-    return () => clearInterval(interval);
+    // Subscribe to YOLO event bus
+    const unsub = useTelemetryStore.subscribe((state, prevState) => {
+      // Find new detections that weren't in the previous state by ID
+      const newDetections = state.detections.filter(
+        d => !prevState.detections.some(pd => pd.id === d.id)
+      );
+
+      if (newDetections.length > 0) {
+        setLogs(prev => {
+          let updated = [...prev];
+          newDetections.forEach(d => {
+             const typeStr = (d.class.includes("ANOMALY") || d.class.includes("DEBRIS")) ? "ERR" : "WARN";
+             updated.push({
+               id: idCounter++,
+               text: `[YOLO] ACQUIRED: ${d.class} | CONF: ${(d.confidence*100).toFixed(1)}% | TRK_ID: ${d.id}`,
+               type: typeStr as "ERR" | "WARN"
+             });
+          });
+          if (updated.length > 20) updated = updated.slice(updated.length - 20);
+          return updated;
+        });
+      }
+    });
+
+    return () => {
+       clearInterval(interval);
+       unsub();
+    };
   }, []);
 
   return (
@@ -54,7 +82,9 @@ export function SystemLogs() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0 }}
               className={`whitespace-nowrap ${
-                log.type === "WARN" ? "text-tactical-red" : "text-tactical-cyan/70"
+                log.type === "ERR" ? "text-tactical-red" :
+                log.type === "WARN" ? "text-yellow-400" :
+                "text-tactical-cyan/70"
               }`}
             >
               <span className="opacity-50 mr-2" suppressHydrationWarning>

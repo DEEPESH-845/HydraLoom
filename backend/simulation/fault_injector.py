@@ -23,16 +23,33 @@ class FaultInjector:
     def trigger_anomaly(self, anomaly_type: str):
         if anomaly_type == "SENSOR_LOSS":
             print("[FaultInjector] Triggering SENSOR_LOSS")
-            # In a real scenario, this would intercept HAL broker calls and return None or frozen values
-            self.broker.sim_depth.noise_std = 10.0 # Massive noise spike
+            self.broker.sim_depth.noise_std = 15.0 # Massive noise spike
+            self.broker.sim_imu.noise_std = 10.0
+            threading.Timer(8.0, self._revert_sensor_loss).start()
+            
         elif anomaly_type == "LEAK_DETECT":
             print("[FaultInjector] Triggering LEAK_DETECT")
-            # This would modify the state returned by HAL Broker
-            pass
+            self.broker.leak_detected = True
+            threading.Timer(10.0, self._revert_leak).start()
+            
         elif anomaly_type == "THRUSTER_OVERLOAD":
             print("[FaultInjector] Triggering THRUSTER_OVERLOAD")
-            # Halve the efficiency of T1 in the physics engine
-            pass
+            # Drop efficiency of T1 and T3 to 10%
+            self.broker.physics.efficiency = [0.1, 1.0, 0.1, 1.0]
+            threading.Timer(8.0, self._revert_thruster).start()
+
+    def _revert_sensor_loss(self):
+        print("[FaultInjector] Reverting SENSOR_LOSS")
+        self.broker.sim_depth.noise_std = 0.5
+        self.broker.sim_imu.noise_std = 0.1
+        
+    def _revert_leak(self):
+        print("[FaultInjector] Reverting LEAK_DETECT")
+        self.broker.leak_detected = False
+        
+    def _revert_thruster(self):
+        print("[FaultInjector] Reverting THRUSTER_OVERLOAD")
+        self.broker.physics.efficiency = [1.0, 1.0, 1.0, 1.0]
 
     def _fault_loop(self):
         while self.running:

@@ -1,4 +1,5 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 import asyncio
 import time
 import json
@@ -18,7 +19,12 @@ vision_pipeline = VisionPipeline(mode=hal_broker.mode, physics=hal_broker.physic
 async def startup_event():
     print("[Main] Booting Digital Twin Edge Compute...")
     fault_injector.start()
-    # vision_pipeline.start() # Disabled to prevent crash without OpenCV camera index in dev
+    vision_pipeline.start() # Enabled for MJPEG Live Video Feed
+
+@app.get("/video_feed")
+async def video_feed():
+    """MJPEG Live Video Stream for Frontend Texture"""
+    return StreamingResponse(vision_pipeline.generate_mjpeg_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -31,6 +37,7 @@ def get_full_telemetry():
     
     return {
         "timestamp": int(time.time() * 1000),
+        "mode": hal_broker.mode,
         "state": hw.get("state"),
         "sensors": hw.get("sensors"),
         "imu": hw.get("imu"),
@@ -60,8 +67,10 @@ async def command_endpoint(websocket: WebSocket):
             cmd = json.loads(data)
             
             if cmd.get("type") == "SET_MODE":
-                hal_broker.mode = cmd.get("mode")
-                print(f"[Main] Switched to {hal_broker.mode} mode.")
+                new_mode = cmd.get("mode")
+                hal_broker.mode = new_mode
+                vision_pipeline.set_mode(new_mode)
+                print(f"[Main] Switched to {new_mode} mode.")
             elif cmd.get("type") == "INJECT_FAULT":
                 fault_injector.trigger_anomaly(cmd.get("fault"))
             elif cmd.get("type") == "SET_PWM":

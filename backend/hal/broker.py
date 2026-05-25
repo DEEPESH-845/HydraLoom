@@ -8,6 +8,7 @@ class HALBroker:
     """
     def __init__(self):
         self.mode = "SIMULATION" # Default to simulation
+        self.leak_detected = False
         
         # Initialize Digital Twin
         self.physics = ThrusterPhysicsEngine()
@@ -29,7 +30,7 @@ class HALBroker:
                     "depth": self.sim_depth.get_depth(),
                     "pressure": 1000 + (self.sim_depth.get_depth() * 100),
                     "temperature": self.sim_depth.get_temperature(),
-                    "leakDetected": False
+                    "leakDetected": self.leak_detected
                 },
                 "imu": {
                     "yaw": yaw,

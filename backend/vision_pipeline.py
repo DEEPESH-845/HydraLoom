@@ -25,16 +25,43 @@ class VisionPipeline:
     def _ensure_model_loaded(self):
         if self.model is None:
             print(f"[Vision] Loading YOLO model in {self.mode} mode...")
-            self.model = YOLO("yolov8n.pt")
+            import torch
+            # PyTorch 2.6 defaults weights_only=True which breaks Ultralytics YOLOv8 loading.
+            # Monkeypatch torch.load to set weights_only=False temporarily.
+            original_load = torch.load
+            def patched_load(*args, **kwargs):
+                if 'weights_only' not in kwargs:
+                    kwargs['weights_only'] = False
+                return original_load(*args, **kwargs)
+            
+            torch.load = patched_load
+            try:
+                self.model = YOLO("yolov8n.pt")
+            finally:
+                torch.load = original_load
+
+    def set_mode(self, new_mode):
+        if self.mode == new_mode:
+            return
+        
+        print(f"[Vision] Queueing mode switch to {new_mode}")
+        with self.lock:
+            self._pending_mode_switch = new_mode
 
     def start(self):
+        self._reset_tracker = False
         self._ensure_model_loaded()
 
         if self.mode == "HARDWARE":
-            self.cap = cv2.VideoCapture(self.camera_index)
+            import platform
+            if platform.system() == "Darwin":
+                self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_AVFOUNDATION)
+            else:
+                self.cap = cv2.VideoCapture(self.camera_index)
         else:
-            # Simulated Video Source (Generated noise pattern reacting to physics)
-            pass
+            # Simulated Video Source: Real MP4 playback loop
+            print("[Vision] Using realistic underwater MP4 loop for SIMULATION mode.")
+            self.cap = cv2.VideoCapture("underwater.mp4")
 
         gst_str = (
             f"appsrc ! videoconvert ! video/x-raw,format=I420 ! "
@@ -47,52 +74,77 @@ class VisionPipeline:
         threading.Thread(target=self._process_loop, daemon=True).start()
         print(f"[Vision] Pipeline started. Streaming UDP to {self.udp_host}:{self.udp_port}")
 
-    def _generate_simulation_frame(self):
-        # Generate an underwater-looking frame synchronized with physics
-        state = self.physics.get_state() if self.physics else {"yaw": 0, "depth": 0}
-        
-        # Base color based on depth
-        depth_factor = min(state["depth"] / 100.0, 1.0)
-        b = int(100 - (depth_factor * 80))
-        g = int(50 - (depth_factor * 40))
-        r = int(20 - (depth_factor * 20))
-        
-        frame = np.full((480, 640, 3), (b, g, r), dtype=np.uint8)
-        
-        # Add a simulated object ("Structural Crack") fixed at world coordinate yaw=180, depth=40
-        # If the ROV is near yaw 180 and depth 40, render a dark shape for YOLO to "detect"
-        yaw_diff = abs(state["yaw"] - 180)
-        depth_diff = abs(state["depth"] - 40)
-        
-        if yaw_diff < 30 and depth_diff < 10:
-            # Calculate screen position based on yaw/depth offset
-            x = int(320 + (state["yaw"] - 180) * 10)
-            y = int(240 + (state["depth"] - 40) * 10)
-            
-            # Draw an anomaly
-            cv2.rectangle(frame, (x-40, y-60), (x+40, y+60), (0, 0, 0), -1)
-            
-        return frame
-
     def _process_loop(self):
         prev_time = time.time()
         
         while self.running:
-            if self.mode == "HARDWARE" and self.cap:
+            with self.lock:
+                pending_mode = getattr(self, '_pending_mode_switch', None)
+                if pending_mode:
+                    print(f"[Vision] Executing mode switch to {pending_mode}...")
+                    self.mode = pending_mode
+                    if self.cap:
+                        self.cap.release()
+                    
+                    if self.mode == "HARDWARE":
+                        import platform
+                        if platform.system() == "Darwin":
+                            self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_AVFOUNDATION)
+                        else:
+                            self.cap = cv2.VideoCapture(self.camera_index)
+                    else:
+                        self.cap = cv2.VideoCapture("underwater.mp4")
+                        
+                    self._reset_tracker = True
+                    self._pending_mode_switch = None
+                    print(f"[Vision] Mode switch complete. Camera opened: {self.cap.isOpened() if self.cap else False}")
+
+            if self.cap and self.cap.isOpened():
                 ret, frame = self.cap.read()
                 if not ret:
-                    time.sleep(0.01)
-                    continue
+                    # Video ended, loop it
+                    if self.mode == "SIMULATION":
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    else:
+                        time.sleep(0.01)
+                        continue
             else:
-                frame = self._generate_simulation_frame()
-                time.sleep(0.033) # 30 fps
+                time.sleep(0.1)
+                continue
+
+            # Standardize resolution to 640x480 to prevent VideoWriter and frontend scaling issues
+            frame = cv2.resize(frame, (640, 480))
+
+            # Limit FPS if reading from MP4 so we don't process at 1000fps
+            if self.mode == "SIMULATION":
+                 time.sleep(1/30.0)
 
             # Run YOLO tracking
             # In simulation mode, YOLO actually runs on the generated frame!
             # This perfectly verifies the inference pipeline is working without faking JSON arrays.
             self._ensure_model_loaded()
+            
+            with self.lock:
+                if getattr(self, '_reset_tracker', False):
+                    if hasattr(self.model, 'predictor'):
+                        self.model.predictor = None # Force complete tracker reinitialization
+                    self._reset_tracker = False
+                    
             results = self.model.track(frame, persist=True, verbose=False, conf=0.25)
             
+            TACTICAL_LABELS = {
+                0: "BIOLOGICAL_CONTACT",       # person
+                4: "DEBRIS",                   # airplane
+                8: "SHIPWRECK",                # boat
+                24: "ANOMALY",                 # backpack
+                28: "UNDERWATER_PIPE",         # suitcase
+                32: "UNIDENTIFIED_OBJECT",     # sports ball
+                39: "STRUCTURAL_DEBRIS",       # bottle
+                41: "CORROSION",               # cup
+                58: "CRACK",                   # potted plant
+            }
+
             current_detections = []
             if results and len(results) > 0 and results[0].boxes:
                 boxes = results[0].boxes
@@ -100,9 +152,10 @@ class VisionPipeline:
                     x, y, w, h = box.xywh[0].tolist()
                     conf = box.conf[0].item()
                     cls_id = int(box.cls[0].item())
+                    tactical_class = TACTICAL_LABELS.get(cls_id, f"UNIDENTIFIED_OBJECT")
                     current_detections.append({
                         "id": int(box.id[0].item()) if box.id is not None else 0,
-                        "class": "Simulated_Anomaly", # Override class for demo
+                        "class": tactical_class,
                         "confidence": conf,
                         "bbox": [x/640.0, y/480.0, w/640.0, h/480.0]
                     })
@@ -114,8 +167,12 @@ class VisionPipeline:
             self.fps = 1.0 / (curr_time - prev_time)
             prev_time = curr_time
 
-            if self.out.isOpened():
+            if self.out and self.out.isOpened():
                 self.out.write(frame)
+                
+            # Buffer for MJPEG streaming
+            with self.lock:
+                self.latest_frame = frame.copy()
 
     def get_vision_telemetry(self):
         with self.lock:
@@ -123,6 +180,24 @@ class VisionPipeline:
                 "fps": round(self.fps, 1),
                 "detections": self.latest_detections.copy()
             }
+            
+    def generate_mjpeg_stream(self):
+        """Yields JPEG frames for a FastAPI StreamingResponse."""
+        while self.running:
+            frame = None
+            with self.lock:
+                if hasattr(self, 'latest_frame') and self.latest_frame is not None:
+                    frame = self.latest_frame.copy()
+            
+            if frame is not None:
+                # Encode frame to JPEG
+                ret, buffer = cv2.imencode('.jpg', frame)
+                if ret:
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            
+            time.sleep(0.033) # Limit to ~30fps stream
 
     def stop(self):
         self.running = False

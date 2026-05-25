@@ -43,7 +43,7 @@
 /* Cinematic Panel Utilities */
 @layer utilities {
   .glass-panel-advanced {
-    @apply bg-tactical-panel backdrop-blur-xl backdrop-contrast-125 border border-tactical-cyan/10 shadow-[inset_0_0_20px_rgba(0,184,217,0.02),0_0_15px_rgba(0,240,255,0.05)];
+    @apply bg-tactical-panel backdrop-blur-sm backdrop-contrast-125 border border-tactical-cyan/10 shadow-[inset_0_0_20px_rgba(0,184,217,0.02),0_0_15px_rgba(0,240,255,0.05)];
   }
   
   .holographic-glow {
@@ -76,4 +76,11 @@
 .vignette-overlay {
   background: radial-gradient(circle, transparent 40%, rgba(1, 5, 8, 0.8) 100%);
   pointer-events: none;
+}
+
+.radar-grid {
+  background-image: 
+    linear-gradient(to right, rgba(0, 240, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 240, 255, 0.1) 1px, transparent 1px);
+  background-size: 20px 20px;
 }

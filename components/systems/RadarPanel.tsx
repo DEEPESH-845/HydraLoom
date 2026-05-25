@@ -84,90 +84,81 @@ const SonarShader = () => {
 
           #define PI 3.14159265359
 
-          // 2D Rotation Matrix
           mat2 rotate2d(float _angle){
-              return mat2(cos(_angle),-sin(_angle),
-                          sin(_angle),cos(_angle));
-          }
-
-          // Random noise for sonar fog
-          float hash(vec2 p) {
-            return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+              return mat2(cos(_angle),-sin(_angle), sin(_angle),cos(_angle));
           }
 
           void main() {
             vec2 cUv = vUv * 2.0 - 1.0;
             float dist = length(cUv);
 
-            // Circular boundary
-            if (dist > 0.95) {
+            // Circular boundary mask
+            if (dist > 0.98) {
               gl_FragColor = vec4(0.0);
               return;
             }
 
-            // Rotate entire radar map opposite to ROV yaw to create "True North" stabilization effect
-            // Wait, standard ROV sonar sweeps relative to ROV. Let's keep it relative to ROV, but rotate the background fog based on yaw.
             vec2 worldUv = rotate2d(uYaw) * cUv;
 
-            // Volumetric Sonar Fog (Simulating acoustic interference in water)
-            float fogNoise = hash(floor(worldUv * 20.0 + uTime * 2.0));
-            vec3 color = mix(uBgColor, uColor, fogNoise * 0.05);
+            // Stable, lightweight ambient sonar glow (replaces heavy fbm noise)
+            float stableGlow = sin(dist * 10.0 - uTime * 0.5) * 0.5 + 0.5;
+            vec3 color = mix(uBgColor, uColor, stableGlow * 0.05);
 
-            // Expanding acoustic pulse rings (pinging outwards)
-            float pulse = fract(-uTime * 0.5 + dist * 5.0);
-            if (pulse < 0.1) {
-              color = mix(color, uColor, 0.1 * (1.0 - dist));
-            }
+            // Expanding acoustic pulse rings (Inverse-square decay)
+            float pulseWave = fract(-uTime * 0.3 + dist * 3.0);
+            float pulseIntensity = smoothstep(0.0, 0.1, pulseWave) * smoothstep(0.2, 0.1, pulseWave);
+            float attenuation = 1.0 / (1.0 + 5.0 * dist * dist); // Inverse square
+            color += uColor * pulseIntensity * attenuation * 0.3;
 
-            // Concentric grid lines
+            // Concentric grid lines (Tactical Grid)
             float rings = fract(dist * 8.0);
-            if (rings < 0.05) color = mix(color, uColor, 0.15);
+            if (rings < 0.03) color += uColor * 0.2;
+            if (rings < 0.01) color += uColor * 0.4; // Brighter core line
 
             // Crosshairs
             if (abs(cUv.x) < 0.005 || abs(cUv.y) < 0.005) {
-              color = mix(color, uColor, 0.2);
+              color += uColor * 0.15;
             }
 
             // Sweeping radar beam
-            float angle = atan(cUv.x, cUv.y); // Note x/y swapped so 0 is up (forward)
+            float angle = atan(cUv.x, cUv.y);
             if (angle < 0.0) angle += 2.0 * PI;
-            
-            float sweepAngle = mod(-uTime * 3.0, 2.0 * PI);
+            float sweepAngle = mod(-uTime * 2.5, 2.0 * PI);
             float diff = sweepAngle - angle;
             if (diff < 0.0) diff += 2.0 * PI;
 
             // Sweeping gradient
             if (diff < 1.0) {
               float intensity = 1.0 - diff;
-              color = mix(color, uColor, intensity * 0.6);
+              color += uColor * (intensity * intensity) * 0.8;
             }
 
-            // Render YOLO synchronized target blips
+            // Render YOLO synchronized target blips with acoustic reflection
             for(int i=0; i<4; i++) {
               if (uPings[i].x == -99.0) continue;
 
               float dPing = length(cUv - uPings[i]);
               float timeSincePing = uTime - uPingTimes[i];
               
-              if (dPing < 0.04) {
-                // Flash intensely then fade
-                float fade = max(0.0, 1.0 - (timeSincePing * 2.0));
+              if (dPing < 0.05) {
+                float fade = max(0.0, 1.0 - (timeSincePing * 1.5));
+                vec3 blipColor = mix(uColor, vec3(1.0, 0.1, 0.1), 0.9); // Threat red
                 
-                // Add a warning red to the blip if it's close
-                vec3 blipColor = mix(uColor, vec3(1.0, 0.0, 0.0), 0.8);
-                
-                color = mix(color, blipColor, fade * (1.0 - (dPing / 0.04)));
+                // Hot core
+                float core = smoothstep(0.05, 0.01, dPing);
+                color += blipColor * core * fade * 1.5;
               }
               
-              // Draw an acoustic reflection ring around the target
-              float ringDist = abs(dPing - (timeSincePing * 0.2));
-              if (ringDist < 0.01 && timeSincePing < 1.0) {
-                 color = mix(color, vec3(1.0,0.0,0.0), 0.5 * (1.0 - timeSincePing));
+              // Acoustic reflection ring expanding from target
+              float ringDist = abs(dPing - (timeSincePing * 0.15));
+              if (ringDist < 0.01 && timeSincePing < 2.0) {
+                 float ringFade = max(0.0, 1.0 - (timeSincePing * 0.5));
+                 color += vec3(1.0, 0.2, 0.2) * ringFade * 0.6;
               }
             }
 
-            // Add outer vignette
-            color *= smoothstep(0.95, 0.6, dist);
+            // Outer vignette to simulate CRT falloff
+            color *= smoothstep(0.98, 0.7, dist);
 
             gl_FragColor = vec4(color, 1.0);
           }

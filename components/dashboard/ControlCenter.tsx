@@ -29,13 +29,13 @@ export function ControlCenter() {
           <div className="text-tactical-cyan/60 mb-1">HAL_ORCHESTRATOR_MODE</div>
           <div className="flex space-x-2">
             <button 
-              onClick={() => sendCommand({ type: "SET_MODE", mode: "HARDWARE" })}
+              onClick={() => { sendCommand({ type: "SET_MODE", mode: "HARDWARE" }); }}
               className={`flex-1 py-1 transition-colors ${mode === "HARDWARE" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
             >
               HARDWARE
             </button>
             <button 
-              onClick={() => sendCommand({ type: "SET_MODE", mode: "SIMULATION" })}
+              onClick={() => { sendCommand({ type: "SET_MODE", mode: "SIMULATION" }); }}
               className={`flex-1 py-1 transition-colors ${mode === "SIMULATION" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
             >
               SIMULATION

@@ -2,67 +2,64 @@
 
 import { useRef, useMemo } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { EffectComposer, Bloom, Noise, Vignette, ChromaticAberration } from "@react-three/postprocessing";
-import { BlendFunction } from "postprocessing";
+
 import * as THREE from "three";
 import { AIDetectionOverlay } from "./AIDetectionOverlay";
 import { useTelemetryStore } from "@/lib/store/telemetryStore";
 import { motion } from "framer-motion";
 import { Vector2 } from "three";
-import { Glitch } from "@react-three/postprocessing";
-import { GlitchMode } from "postprocessing";
-
-const DynamicPostProcessing = () => {
-  const store = useTelemetryStore();
-  
-  // Calculate average thruster stress (0 to 1)
-  const stress = (Math.abs(store.thrusters.t1) + Math.abs(store.thrusters.t2) + Math.abs(store.thrusters.t3) + Math.abs(store.thrusters.t4)) / 400.0;
-  
-  // Base depth noise
-  const depthFactor = Math.min(store.depth / 100, 1.0);
-  
-  const isGlitching = !store.isOnline || stress > 0.8 || store.latency > 500;
-
-  return (
-    <EffectComposer>
-      <Noise opacity={0.15 + (depthFactor * 0.2) + (stress * 0.3)} blendFunction={BlendFunction.OVERLAY} />
-      <Vignette eskil={false} offset={0.3 + (depthFactor * 0.2)} darkness={0.8 + (depthFactor * 0.2)} />
-      <ChromaticAberration 
-        offset={new Vector2(0.002 + (stress * 0.01), 0.002 + (stress * 0.01))} 
-        blendFunction={BlendFunction.NORMAL} 
-        radialModulation={false} 
-        modulationOffset={0} 
-      />
-      <Bloom luminanceThreshold={0.2} luminanceSmoothing={0.9} intensity={1.5} />
-      <Glitch 
-        delay={new Vector2(1.5, 3.5)} 
-        duration={new Vector2(0.1, 0.3)} 
-        strength={new Vector2(0.2, 0.4)} 
-        mode={GlitchMode.SPORADIC} 
-        active={isGlitching} 
-      />
-    </EffectComposer>
-  );
-};
-
-// A custom shader material that generates an animated underwater gradient if no video is available
+import { useShallow } from "zustand/react/shallow";
+// Dynamic PostProcessing removed for GPU optimization
 const UnderwaterBackground = () => {
   const meshRef = useRef<THREE.Mesh>(null);
   const materialRef = useRef<THREE.ShaderMaterial>(null);
   const { viewport } = useThree();
 
+  const mjpegTexture = useMemo(() => {
+    const tex = new THREE.Texture();
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    if (typeof window !== 'undefined') {
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+      img.src = 'http://127.0.0.1:8000/video_feed';
+      tex.image = img;
+    }
+    return tex;
+  }, []);
+
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
       uDepth: { value: 50 },
+      uYawVel: { value: 0 },
+      uVideoTex: { value: mjpegTexture },
     }),
-    []
+    [mjpegTexture]
   );
 
-  useFrame((state) => {
+  const prevYawRef = useRef(0);
+
+  useFrame((state, delta) => {
     if (materialRef.current) {
+      const store = useTelemetryStore.getState();
+      
+      let diff = store.yaw - prevYawRef.current;
+      if (diff > 180) diff -= 360;
+      if (diff < -180) diff += 360;
+      const mockYawVel = delta > 0 ? diff / delta : 0;
+      prevYawRef.current = store.yaw;
+
       materialRef.current.uniforms.uTime.value = state.clock.elapsedTime;
-      materialRef.current.uniforms.uDepth.value = useTelemetryStore.getState().depth;
+      materialRef.current.uniforms.uDepth.value = store.depth;
+      materialRef.current.uniforms.uYawVel.value = mockYawVel;
+      
+      // Force GPU to pull latest MJPEG frame
+      const img = mjpegTexture.image as HTMLImageElement;
+      if (img && img.complete) {
+        mjpegTexture.needsUpdate = true;
+      }
     }
   });
 
@@ -82,25 +79,55 @@ const UnderwaterBackground = () => {
         fragmentShader={`
           uniform float uTime;
           uniform float uDepth;
+          uniform float uYawVel;
+          uniform sampler2D uVideoTex;
           varying vec2 vUv;
 
-          // Simple noise function
           float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
           void main() {
             vec2 uv = vUv;
             
-            // Base water color shifts based on depth
-            float depthFactor = clamp(uDepth / 100.0, 0.0, 1.0);
-            vec3 shallowColor = vec3(0.0, 0.3, 0.4);
-            vec3 deepColor = vec3(0.0, 0.05, 0.1);
-            vec3 bgColor = mix(shallowColor, deepColor, uv.y + depthFactor * 0.5);
+            // Sample Real MJPEG Video
+            vec4 videoColor = texture2D(uVideoTex, uv);
+            
+            // If video hasn't loaded or is black, use a base tactical color
+            vec3 baseColor = videoColor.rgb;
+            if (length(baseColor) < 0.01) {
+                baseColor = vec3(0.0, 0.05, 0.1);
+            }
+            
+            float depthN = clamp(uDepth / 100.0, 0.0, 1.0);
+            
+            float redAtten = smoothstep(0.1, 0.0, depthN);
+            float greenAtten = smoothstep(0.4, 0.0, depthN);
+            float blueAtten = smoothstep(1.0, 0.1, depthN);
+            
+            // Apply Physical Absorption to Video Feed!
+            vec3 waterColor = baseColor * vec3(0.2 + redAtten*0.8, 0.3 + greenAtten*0.7, 0.5 + blueAtten*0.5);
+            waterColor *= mix(1.0, 0.2, uv.y + depthN);
 
-            // Caustics/Light rays simulation
-            float caustics = sin(uv.x * 20.0 + uTime) * sin(uv.y * 15.0 - uTime * 0.5) * 0.5 + 0.5;
-            bgColor += vec3(0.0, 0.1, 0.15) * caustics * (1.0 - depthFactor);
+            if (depthN < 0.3) {
+              float causticFade = 1.0 - (depthN / 0.3);
+              float caustics = sin(uv.x * 30.0 + uTime) * sin(uv.y * 20.0 - uTime * 0.8) * 0.5 + 0.5;
+              waterColor += vec3(0.0, 0.2, 0.3) * caustics * causticFade * (1.0 - uv.y);
+            }
 
-            gl_FragColor = vec4(bgColor, 1.0);
+            vec2 drift = vec2(uYawVel * 0.01 * uTime, uTime * 0.05);
+            float particles = 0.0;
+            for(float i=0.0; i<3.0; i++) {
+               vec2 puv = fract(uv * (10.0 + i*5.0) + drift * (1.0+i));
+               float p = smoothstep(0.05, 0.0, length(puv - 0.5));
+               p *= sin(uTime * 3.0 + i*10.0 + hash(uv)) * 0.5 + 0.5;
+               particles += p;
+            }
+            
+            waterColor += vec3(0.8, 0.9, 1.0) * particles * 0.15 * max(blueAtten, 0.1);
+
+            float dist = length(uv - 0.5);
+            waterColor *= smoothstep(0.8, 0.3, dist + depthN*0.5);
+
+            gl_FragColor = vec4(waterColor, 1.0);
           }
         `}
       />
@@ -109,7 +136,14 @@ const UnderwaterBackground = () => {
 };
 
 export function VideoFeed() {
-  const isOnline = useTelemetryStore((state) => state.isOnline);
+  const { isOnline, fps, latency, detectionsCount } = useTelemetryStore(
+    useShallow((state) => ({
+      isOnline: state.isOnline,
+      fps: state.fps,
+      latency: state.latency,
+      detectionsCount: state.detections.length
+    }))
+  );
 
   return (
     <div className="relative w-full h-full bg-tactical-abyss overflow-hidden">
@@ -119,26 +153,31 @@ export function VideoFeed() {
         <Canvas>
           <color attach="background" args={["#010508"]} />
           <UnderwaterBackground />
-          <DynamicPostProcessing />
         </Canvas>
       </div>
 
       {/* HUD Elements (DOM Overlay) */}
       <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between z-10">
         
-        {/* Top HUD */}
+        {/* TOP */}
         <div className="flex justify-between items-start w-full text-[10px] font-mono text-tactical-cyan/80">
-          <div className="flex items-center space-x-2">
-            <motion.div 
-              className="w-2 h-2 rounded-full bg-tactical-red holographic-glow"
-              animate={{ opacity: [1, 0.2, 1] }}
-              transition={{ repeat: Infinity, duration: 1.5 }}
-            />
-            <span className="tracking-widest font-bold">REC_LIVE</span>
+          {/* TOP LEFT */}
+          <div className="flex flex-col space-y-1">
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 rounded-full bg-tactical-red holographic-glow animate-pulse" />
+              <span className="tracking-widest font-bold">REC_LIVE</span>
+            </div>
+            <div>CAM_ID: OPTIC-01-FWD</div>
+            <div>MSN_ID: OMEGA-7-DEEP</div>
           </div>
-          <div className="text-right">
-            <div>CAM-01 [FORWARD_OPTIC]</div>
-            <div>VOLUMETRIC: ACTIVE</div>
+
+          {/* TOP RIGHT */}
+          <div className="flex flex-col items-end space-y-1 text-right">
+             <div className="flex items-center space-x-2 text-tactical-cyan">
+                <span>FPS: {Math.round(fps)}</span>
+             </div>
+             <div>LATENCY: {latency}MS</div>
+             <div className="text-tactical-green">AI_SYS: ONLINE</div>
           </div>
         </div>
 
@@ -151,15 +190,23 @@ export function VideoFeed() {
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-[2px] rounded-full bg-tactical-red holographic-glow" />
         </div>
 
-        {/* Bottom HUD */}
-        <div className="flex justify-between items-end w-full text-[10px] font-mono text-tactical-cyan/60">
-          <div>
-            <div>AZIMUTH 142.4</div>
-            <div>EXP: AUTO [H264]</div>
+        {/* BOTTOM */}
+        <div className="flex justify-between items-end w-full text-[10px] font-mono text-tactical-cyan/80">
+          {/* BOTTOM LEFT */}
+          <div className="flex flex-col space-y-1">
+            <div>DETECTIONS: {detectionsCount}</div>
+            <div className={detectionsCount > 0 ? "text-tactical-red animate-pulse" : "text-tactical-cyan"}>
+              TRG_LOCK: {detectionsCount > 0 ? "ACQUIRED" : "SEARCHING"}
+            </div>
           </div>
-          <div className="text-right">
-            <div>MISSION: OMEGA-7</div>
-            <div>THREAT_LVL: UNKNOWN</div>
+
+          {/* BOTTOM RIGHT */}
+          <div className="flex flex-col items-end space-y-1 text-right">
+            <div suppressHydrationWarning>TS: {new Date().toISOString().split("T")[1].replace("Z", "")}</div>
+            <div className="flex items-center space-x-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-tactical-green animate-pulse" />
+              <span>TLM_SYNC_OK</span>
+            </div>
           </div>
         </div>
       </div>
@@ -168,7 +215,7 @@ export function VideoFeed() {
       {isOnline && <AIDetectionOverlay />}
 
       {/* CRT Scanline Overlay */}
-      <div className="absolute inset-0 crt-overlay pointer-events-none z-20 mix-blend-overlay opacity-50" />
+      <div className="absolute inset-0 crt-overlay pointer-events-none z-20 opacity-50" />
       <div className="absolute inset-0 vignette-overlay pointer-events-none z-20" />
     </div>
   );

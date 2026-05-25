@@ -32,6 +32,9 @@ class ThrusterPhysicsEngine:
         self.t3 = 0.0
         self.t4 = 0.0
         
+        # Thruster efficiency (for fault injection)
+        self.efficiency = [1.0, 1.0, 1.0, 1.0] # t1, t2, t3, t4
+        
         self.running = False
         self.lock = threading.Lock()
         
@@ -63,12 +66,15 @@ class ThrusterPhysicsEngine:
         while self.running:
             with self.lock:
                 # 1. Map PWM to physical force (simplified curve)
-                # Let t1/t2 be forward/reverse (surge & yaw)
-                # Let t3/t4 be vertical (heave)
+                # Apply efficiency multipliers (fault injection)
+                eff_t1 = self.t1 * self.efficiency[0]
+                eff_t2 = self.t2 * self.efficiency[1]
+                eff_t3 = self.t3 * self.efficiency[2]
+                eff_t4 = self.t4 * self.efficiency[3]
                 
-                f_fwd = (self.t1 + self.t2) * 0.1
-                f_yaw = (self.t1 - self.t2) * 0.05
-                f_heave = (self.t3 + self.t4) * 0.1
+                f_fwd = (eff_t1 + eff_t2) * 0.1
+                f_yaw = (eff_t1 - eff_t2) * 0.05
+                f_heave = (eff_t3 + eff_t4) * 0.1
                 
                 # 2. Calculate Accelerations
                 accel_yaw = f_yaw / self.rotational_inertia

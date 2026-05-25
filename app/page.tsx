@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTelemetryStore } from "@/lib/store/telemetryStore";
 import { Topbar } from "@/components/dashboard/Topbar";
 import { GlassPanel } from "@/components/core/GlassPanel";
 import { useTelemetryBridge } from "@/lib/hooks/useTelemetryBridge";
@@ -16,11 +17,24 @@ import { ControlCenter } from "@/components/dashboard/ControlCenter";
 export default function Dashboard() {
   const [isBooted, setIsBooted] = useState(false);
   useTelemetryBridge();
+  const leakDetected = useTelemetryStore((state) => state.leakDetected);
 
   return (
     <>
       {!isBooted && <BootSequence onComplete={() => setIsBooted(true)} />}
       
+      {/* Leak Detection Global Overlay */}
+      {leakDetected && (
+        <div className="fixed inset-0 z-50 pointer-events-none flex items-center justify-center">
+          <div className="absolute inset-0 border-[8px] border-tactical-red animate-pulse" />
+          <div className="absolute inset-0 bg-tactical-red/10 animate-pulse" />
+          <div className="bg-tactical-red/90 text-black font-black font-mono text-4xl px-8 py-4 tracking-[0.5em] shadow-[0_0_50px_rgba(255,0,0,0.8)] border-4 border-black uppercase text-center animate-bounce">
+            CRITICAL HULL BREACH DETECTED<br/>
+            <span className="text-xl tracking-widest opacity-80 mt-2 block">IMMEDIATE SURFACE REQUIRED</span>
+          </div>
+        </div>
+      )}
+
       <div className={`flex flex-col h-screen w-screen overflow-hidden p-4 space-y-4 transition-opacity duration-1000 ${isBooted ? "opacity-100" : "opacity-0"}`}>
         {/* TOPBAR */}
         <Topbar />

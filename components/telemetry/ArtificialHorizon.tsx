@@ -2,9 +2,12 @@
 
 import { motion } from "framer-motion";
 import { useTelemetryStore } from "@/lib/store/telemetryStore";
+import { useShallow } from "zustand/react/shallow";
 
 export function ArtificialHorizon() {
-  const { pitch, roll, yaw } = useTelemetryStore();
+  const { pitch, roll, yaw } = useTelemetryStore(
+    useShallow((state) => ({ pitch: state.pitch, roll: state.roll, yaw: state.yaw }))
+  );
   const isOnline = useTelemetryStore((state) => state.isOnline);
 
   // Aerospace HUD pitch ladder calculation
