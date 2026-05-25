@@ -16,6 +16,7 @@ interface TelemetryState {
     t4: number;
   };
   // System Status
+  mode: "SIMULATION" | "HARDWARE";
   battery: number;
   fps: number;
   latency: number;
@@ -30,6 +31,7 @@ interface TelemetryState {
   
   // Actions
   updateTelemetry: (data: Partial<TelemetryState>) => void;
+  sendCommand: (cmd: object) => void;
 }
 
 export const useTelemetryStore = create<TelemetryState>((set) => ({
@@ -39,12 +41,13 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   pitch: 0,
   roll: 0,
   thrusters: { t1: 0, t2: 0, t3: 0, t4: 0 },
+  mode: "SIMULATION",
   battery: 100,
   fps: 60,
   latency: 12,
   isOnline: true,
   leakDetected: false,
   detections: [],
-  
   updateTelemetry: (data) => set((state) => ({ ...state, ...data })),
+  sendCommand: (cmd) => console.warn("sendCommand not initialized yet", cmd),
 }));

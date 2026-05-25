@@ -28,11 +28,13 @@ export function useTelemetryBridge(wsUrl = "ws://127.0.0.1:8000/ws/telemetry") {
 
           // Hydrate the Zustand store with real hardware data
           useTelemetryStore.setState({
+            mode: payload.mode || "SIMULATION",
             yaw: payload.imu.yaw,
             pitch: payload.imu.pitch,
             roll: payload.imu.roll,
             depth: payload.sensors.depth,
             temperature: payload.sensors.temperature,
+            leakDetected: payload.sensors.leakDetected || false,
             battery: payload.power.voltage,
             thrusters: {
               t1: payload.propulsion.t1_pwm,
@@ -61,13 +63,35 @@ export function useTelemetryBridge(wsUrl = "ws://127.0.0.1:8000/ws/telemetry") {
       };
     };
 
+    const connectCmd = () => {
+      const cmdWs = new WebSocket("ws://127.0.0.1:8000/ws/command");
+      cmdWs.onopen = () => {
+        console.log("[TelemetryBridge] Command Socket Connected.");
+        useTelemetryStore.setState({
+          sendCommand: (cmd: object) => {
+            if (cmdWs.readyState === WebSocket.OPEN) {
+              cmdWs.send(JSON.stringify(cmd));
+            } else {
+              console.warn("Command socket not open.");
+            }
+          }
+        });
+      };
+      cmdWs.onclose = () => {
+        useTelemetryStore.setState({ sendCommand: (cmd) => console.warn("Command socket offline", cmd) });
+        setTimeout(connectCmd, 2000);
+      };
+      cmdWs.onerror = () => cmdWs.close();
+      return cmdWs;
+    };
+
     connect();
+    const cmdWsInstance = connectCmd();
 
     return () => {
       clearTimeout(reconnectTimer);
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      if (wsRef.current) wsRef.current.close();
+      cmdWsInstance.close();
     };
   }, [wsUrl]);
 
