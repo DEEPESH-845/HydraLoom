@@ -2,11 +2,19 @@
 
 import { motion } from "framer-motion";
 import { useTelemetryStore } from "@/lib/store/telemetryStore";
+import { useShallow } from "zustand/react/shallow";
 import { Activity, Wifi, Battery, BatteryFull, BatteryMedium, BatteryLow, Zap } from "lucide-react";
 import { useState as useReactState, useEffect as useReactEffect } from "react";
 
 export function Topbar() {
-  const { isOnline, fps, latency, battery } = useTelemetryStore();
+  const { isOnline, fps, latency, battery } = useTelemetryStore(
+    useShallow((state) => ({
+      isOnline: state.isOnline,
+      fps: state.fps,
+      latency: state.latency,
+      battery: state.battery,
+    }))
+  );
   const [time, setTime] = useReactState("00:00:00");
 
   useReactEffect(() => {

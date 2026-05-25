@@ -5,25 +5,15 @@ import { useState } from "react";
 
 export function ControlCenter() {
   const isOnline = useTelemetryStore((state) => state.isOnline);
+  const sendCommand = useTelemetryStore((state) => state.sendCommand);
+  const mode = useTelemetryStore((state) => state.mode);
   const [activeFault, setActiveFault] = useState<string | null>(null);
-  
-  // Quick dirty WebSocket command sender
-  const sendCommand = (cmd: object) => {
-    try {
-      const ws = new WebSocket("ws://127.0.0.1:8000/ws/command");
-      ws.onopen = () => {
-        ws.send(JSON.stringify(cmd));
-        setTimeout(() => ws.close(), 100);
-      };
-    } catch(e) {
-      console.error(e);
-    }
-  };
 
   const triggerFault = (fault: string) => {
     setActiveFault(fault);
     sendCommand({ type: "INJECT_FAULT", fault });
-    setTimeout(() => setActiveFault(null), 3000); // UI visual reset
+    const duration = fault === "LEAK_DETECT" ? 10000 : 8000;
+    setTimeout(() => setActiveFault(null), duration);
   };
 
   return (
@@ -40,13 +30,13 @@ export function ControlCenter() {
           <div className="flex space-x-2">
             <button 
               onClick={() => sendCommand({ type: "SET_MODE", mode: "HARDWARE" })}
-              className="flex-1 py-1 border border-tactical-cyan/40 hover:bg-tactical-cyan/20 transition-colors"
+              className={`flex-1 py-1 transition-colors ${mode === "HARDWARE" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
             >
               HARDWARE
             </button>
             <button 
               onClick={() => sendCommand({ type: "SET_MODE", mode: "SIMULATION" })}
-              className="flex-1 py-1 bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold"
+              className={`flex-1 py-1 transition-colors ${mode === "SIMULATION" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
             >
               SIMULATION
             </button>
