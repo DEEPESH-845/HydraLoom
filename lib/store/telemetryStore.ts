@@ -17,6 +17,8 @@ interface TelemetryState {
   };
   // System Status
   mode: "SIMULATION" | "HARDWARE";
+  transitioning: boolean;
+  transitionError: string | null;
   battery: number;
   fps: number;
   latency: number;
@@ -32,6 +34,8 @@ interface TelemetryState {
   // Actions
   updateTelemetry: (data: Partial<TelemetryState>) => void;
   sendCommand: (cmd: object) => void;
+  setTransitioning: (transitioning: boolean) => void;
+  setTransitionError: (error: string | null) => void;
 }
 
 export const useTelemetryStore = create<TelemetryState>((set) => ({
@@ -42,6 +46,8 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   roll: 0,
   thrusters: { t1: 0, t2: 0, t3: 0, t4: 0 },
   mode: "SIMULATION",
+  transitioning: false,
+  transitionError: null,
   battery: 100,
   fps: 60,
   latency: 12,
@@ -50,4 +56,6 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   detections: [],
   updateTelemetry: (data) => set((state) => ({ ...state, ...data })),
   sendCommand: (cmd) => console.warn("sendCommand not initialized yet", cmd),
+  setTransitioning: (transitioning) => set({ transitioning }),
+  setTransitionError: (error) => set({ transitionError: error }),
 }));

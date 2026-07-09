@@ -21,12 +21,20 @@ export function SystemLogs() {
   const [logs, setLogs] = useState<{ id: number; text: string; type: "INFO" | "WARN" | "ERR" }[]>([
     { id: 1, text: "[INFO] System Boot...", type: "INFO" },
   ]);
+  const [now, setNow] = useState("--:--:--");
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Auto scroll to bottom
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  useEffect(() => {
+    const tick = () => setNow(new Date().toISOString().substring(11, 19));
+    const id = setInterval(tick, 1000);
+    tick();
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let idCounter = 2;
@@ -87,8 +95,8 @@ export function SystemLogs() {
                 "text-tactical-cyan/70"
               }`}
             >
-              <span className="opacity-50 mr-2" suppressHydrationWarning>
-                {new Date().toISOString().substring(11, 19)}
+              <span className="opacity-50 mr-2">
+                {now}
               </span>
               {log.text}
             </motion.div>
