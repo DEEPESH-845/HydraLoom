@@ -68,9 +68,17 @@ async def command_endpoint(websocket: WebSocket):
             
             if cmd.get("type") == "SET_MODE":
                 new_mode = cmd.get("mode")
-                hal_broker.mode = new_mode
+                result = hal_broker.set_mode(new_mode)
                 vision_pipeline.set_mode(new_mode)
-                print(f"[Main] Switched to {new_mode} mode.")
+                
+                # Send mode switch result back to frontend
+                await websocket.send_json({
+                    "type": "MODE_SWITCH_RESULT",
+                    "success": result["success"],
+                    "message": result["message"],
+                    "mode": hal_broker.mode
+                })
+                print(f"[Main] Mode switch to {new_mode}: {result['message']}")
             elif cmd.get("type") == "INJECT_FAULT":
                 fault_injector.trigger_anomaly(cmd.get("fault"))
             elif cmd.get("type") == "SET_PWM":
