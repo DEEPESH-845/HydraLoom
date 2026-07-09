@@ -29,6 +29,7 @@ export function useTelemetryBridge(wsUrl = "ws://127.0.0.1:8000/ws/telemetry") {
           // Hydrate the Zustand store with real hardware data
           useTelemetryStore.setState({
             mode: payload.mode || "SIMULATION",
+            transitioning: payload.state?.transitioning || false,
             yaw: payload.imu.yaw,
             pitch: payload.imu.pitch,
             roll: payload.imu.roll,
@@ -70,6 +71,10 @@ export function useTelemetryBridge(wsUrl = "ws://127.0.0.1:8000/ws/telemetry") {
         useTelemetryStore.setState({
           sendCommand: (cmd: object) => {
             if (cmdWs.readyState === WebSocket.OPEN) {
+              // Set transitioning state when sending mode switch command
+              if ((cmd as any).type === "SET_MODE") {
+                useTelemetryStore.setState({ transitioning: true, transitionError: null });
+              }
               cmdWs.send(JSON.stringify(cmd));
             } else {
               console.warn("Command socket not open.");
@@ -77,6 +82,26 @@ export function useTelemetryBridge(wsUrl = "ws://127.0.0.1:8000/ws/telemetry") {
           }
         });
       };
+      
+      // Handle mode switch results from server
+      cmdWs.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "MODE_SWITCH_RESULT") {
+            useTelemetryStore.setState({ 
+              transitioning: false,
+              transitionError: data.success ? null : data.message,
+              mode: data.mode
+            });
+            if (!data.success) {
+              console.error("[TelemetryBridge] Mode switch failed:", data.message);
+            }
+          }
+        } catch (err) {
+          // Ignore non-JSON messages
+        }
+      };
+      
       cmdWs.onclose = () => {
         useTelemetryStore.setState({ sendCommand: (cmd) => console.warn("Command socket offline", cmd) });
         setTimeout(connectCmd, 2000);
