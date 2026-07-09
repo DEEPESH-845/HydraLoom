@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useState, useEffect } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 
 import * as THREE from "three";
@@ -9,6 +9,16 @@ import { useTelemetryStore } from "@/lib/store/telemetryStore";
 import { motion } from "framer-motion";
 import { Vector2 } from "three";
 import { useShallow } from "zustand/react/shallow";
+
+function Timestamp() {
+  const [ts, setTs] = useState("--:--:--");
+  useEffect(() => {
+    setTs(new Date().toISOString().split("T")[1].replace("Z", ""));
+    const id = setInterval(() => setTs(new Date().toISOString().split("T")[1].replace("Z", "")), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <div>TS: {ts}</div>;
+}
 // Dynamic PostProcessing removed for GPU optimization
 const UnderwaterBackground = () => {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -202,7 +212,7 @@ export function VideoFeed() {
 
           {/* BOTTOM RIGHT */}
           <div className="flex flex-col items-end space-y-1 text-right">
-            <div suppressHydrationWarning>TS: {new Date().toISOString().split("T")[1].replace("Z", "")}</div>
+            <Timestamp />
             <div className="flex items-center space-x-1">
               <div className="w-1.5 h-1.5 rounded-full bg-tactical-green animate-pulse" />
               <span>TLM_SYNC_OK</span>

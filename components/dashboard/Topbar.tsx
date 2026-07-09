@@ -7,12 +7,14 @@ import { Activity, Wifi, Battery, BatteryFull, BatteryMedium, BatteryLow, Zap } 
 import { useState as useReactState, useEffect as useReactEffect } from "react";
 
 export function Topbar() {
-  const { isOnline, fps, latency, battery } = useTelemetryStore(
+  const { isOnline, fps, latency, battery, mode, transitioning } = useTelemetryStore(
     useShallow((state) => ({
       isOnline: state.isOnline,
       fps: state.fps,
       latency: state.latency,
       battery: state.battery,
+      mode: state.mode,
+      transitioning: state.transitioning,
     }))
   );
   const [time, setTime] = useReactState("00:00:00");
@@ -50,6 +52,20 @@ export function Topbar() {
         {/* Mission Timer */}
         <div className="font-mono text-sm tracking-wider text-tactical-text/80">
           T+ {time}
+        </div>
+
+        {/* Mode Indicator */}
+        <div className={`flex items-center space-x-2 font-mono text-xs font-semibold tracking-wider ${
+          transitioning ? "text-tactical-yellow" : mode === "HARDWARE" ? "text-tactical-red" : "text-tactical-cyan"
+        }`}>
+          <div className={`w-2 h-2 rounded-full ${
+            transitioning 
+              ? "bg-tactical-yellow animate-pulse" 
+              : mode === "HARDWARE" 
+                ? "bg-tactical-red" 
+                : "bg-tactical-cyan"
+          }`} />
+          <span>{transitioning ? "SWITCHING..." : mode}</span>
         </div>
       </div>
 

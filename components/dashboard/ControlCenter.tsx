@@ -7,6 +7,8 @@ export function ControlCenter() {
   const isOnline = useTelemetryStore((state) => state.isOnline);
   const sendCommand = useTelemetryStore((state) => state.sendCommand);
   const mode = useTelemetryStore((state) => state.mode);
+  const transitioning = useTelemetryStore((state) => state.transitioning);
+  const transitionError = useTelemetryStore((state) => state.transitionError);
   const [activeFault, setActiveFault] = useState<string | null>(null);
 
   const triggerFault = (fault: string) => {
@@ -14,6 +16,11 @@ export function ControlCenter() {
     sendCommand({ type: "INJECT_FAULT", fault });
     const duration = fault === "LEAK_DETECT" ? 10000 : 8000;
     setTimeout(() => setActiveFault(null), duration);
+  };
+
+  const switchMode = (newMode: "SIMULATION" | "HARDWARE") => {
+    if (transitioning || mode === newMode) return;
+    sendCommand({ type: "SET_MODE", mode: newMode });
   };
 
   return (
@@ -28,38 +35,58 @@ export function ControlCenter() {
         <div>
           <div className="text-tactical-cyan/60 mb-1">HAL_ORCHESTRATOR_MODE</div>
           <div className="flex space-x-2">
-            <button 
-              onClick={() => { sendCommand({ type: "SET_MODE", mode: "HARDWARE" }); }}
-              className={`flex-1 py-1 transition-colors ${mode === "HARDWARE" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
+            <button
+              onClick={() => switchMode("HARDWARE")}
+              disabled={transitioning}
+              className={`flex-1 py-1 transition-all ${
+                mode === "HARDWARE"
+                  ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold"
+                  : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"
+              } ${transitioning ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               HARDWARE
             </button>
-            <button 
-              onClick={() => { sendCommand({ type: "SET_MODE", mode: "SIMULATION" }); }}
-              className={`flex-1 py-1 transition-colors ${mode === "SIMULATION" ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold" : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"}`}
+            <button
+              onClick={() => switchMode("SIMULATION")}
+              disabled={transitioning}
+              className={`flex-1 py-1 transition-all ${
+                mode === "SIMULATION"
+                  ? "bg-tactical-cyan/20 border border-tactical-cyan shadow-[0_0_10px_rgba(0,240,255,0.2)] text-tactical-cyan font-bold"
+                  : "border border-tactical-cyan/40 hover:bg-tactical-cyan/20 text-tactical-cyan/60"
+              } ${transitioning ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               SIMULATION
             </button>
           </div>
+          {transitioning && (
+            <div className="mt-1 text-tactical-yellow text-[9px] animate-pulse">
+              Transitioning to {mode === "SIMULATION" ? "HARDWARE" : "SIMULATION"}...
+            </div>
+          )}
+          {transitionError && (
+            <div className="mt-1 text-tactical-red text-[9px]">
+              {transitionError}
+            </div>
+          )}
         </div>
 
         {/* Fault Injection */}
         <div>
           <div className="text-tactical-cyan/60 mb-1">ANOMALY_INJECTION</div>
           <div className="grid grid-cols-2 gap-2">
-            <button 
+            <button
               onClick={() => triggerFault("SENSOR_LOSS")}
               className={`py-1 border ${activeFault === "SENSOR_LOSS" ? "bg-tactical-red/30 border-tactical-red" : "border-tactical-red/40 hover:bg-tactical-red/10 text-tactical-red/80"} transition-colors`}
             >
               SENSOR_LOSS
             </button>
-            <button 
+            <button
               onClick={() => triggerFault("LEAK_DETECT")}
               className={`py-1 border ${activeFault === "LEAK_DETECT" ? "bg-tactical-red/30 border-tactical-red" : "border-tactical-red/40 hover:bg-tactical-red/10 text-tactical-red/80"} transition-colors`}
             >
               LEAK_DETECT
             </button>
-            <button 
+            <button
               onClick={() => triggerFault("THRUSTER_OVERLOAD")}
               className="col-span-2 py-1 border border-tactical-red/40 hover:bg-tactical-red/10 text-tactical-red/80 transition-colors"
             >
