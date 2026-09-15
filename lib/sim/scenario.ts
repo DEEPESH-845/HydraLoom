@@ -1,0 +1,90 @@
+import type { Scenario, TestObject } from "./types";
+import { TEST } from "./constants";
+
+// docs/BLUEPRINT.md section 2.6. Positions are gantry cm, extents are world metres.
+export const DEFAULT_OBJECTS: TestObject[] = [
+  {
+    id: "wreck-01",
+    type: "SHIPWRECK",
+    label: "Shipwreck section",
+    x: 60,
+    y: 26,
+    z: 0.035,
+    halfExtents: [0.11, 0.035, 0.05],
+    rotation: 25,
+    detectability: 0.98,
+    burial: 0.3,
+  },
+  {
+    id: "mine-01",
+    type: "MINE",
+    label: "Training mine (inert)",
+    x: 32,
+    y: 8,
+    z: 0.04,
+    halfExtents: [0.05, 0.05, 0.05],
+    rotation: 0,
+    detectability: 0.95,
+    burial: 0.05,
+  },
+  {
+    id: "debris-pipe",
+    type: "DEBRIS",
+    label: "Pipe section",
+    x: 45,
+    y: 33,
+    z: 0.015,
+    halfExtents: [0.06, 0.015, 0.015],
+    rotation: -40,
+    detectability: 0.7,
+    burial: 0.1,
+    confusableAs: "MINE",
+  },
+  {
+    id: "debris-bracket",
+    type: "DEBRIS",
+    label: "Steel bracket",
+    x: 85,
+    y: 8,
+    z: 0.012,
+    halfExtents: [0.04, 0.012, 0.03],
+    rotation: 70,
+    detectability: 0.72,
+    burial: 0.2,
+  },
+  {
+    id: "debris-rocks",
+    type: "DEBRIS",
+    label: "Rock cluster",
+    x: 15,
+    y: 31,
+    z: 0.02,
+    halfExtents: [0.05, 0.02, 0.04],
+    rotation: 10,
+    detectability: 0.6,
+    burial: 0.35,
+  },
+  {
+    id: "debris-crate",
+    type: "DEBRIS",
+    label: "Plastic crate",
+    x: 93,
+    y: 35,
+    z: 0.025,
+    halfExtents: [0.04, 0.025, 0.03],
+    rotation: -15,
+    detectability: 0.85,
+    burial: 0.4,
+  },
+];
+
+export function defaultScenario(): Scenario {
+  return {
+    objects: DEFAULT_OBJECTS.map((o) => ({ ...o })),
+    turbidity: 0.15,
+    lighting: 0.8,
+    threshold: 0.6,
+    gantrySpeed: 0.65,
+    seed: TEST.seed,
+  };
+}
