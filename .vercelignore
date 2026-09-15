@@ -1,0 +1,8 @@
+# Python edge stack (Raspberry Pi, docker-compose); not part of the Next.js deploy.
+backend
+docker-compose.yml
+# Browser tests and docs; run in CI, not on Vercel.
+e2e
+docs
+playwright.config.ts
+.remember
