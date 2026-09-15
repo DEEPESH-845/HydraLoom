@@ -1,35 +1,20 @@
 import type { Metadata } from "next";
-import { Inter, Orbitron } from "next/font/google";
+import { IBM_Plex_Mono, Inter } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin"],
-});
-
-const orbitron = Orbitron({
-  variable: "--font-mono",
-  subsets: ["latin"],
-});
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
+const plexMono = IBM_Plex_Mono({ variable: "--font-plex-mono", subsets: ["latin"], weight: ["400", "500", "600"] });
 
 export const metadata: Metadata = {
-  title: "HYDRALOOM Mission Control",
-  description: "Cinematic underwater ROV telemetry dashboard",
+  title: "GANTRYLAB - Underwater Robotics Testbed",
+  description:
+    "A controlled aquarium and XY gantry for testing underwater perception, navigation and autonomy before field deployment. Interactive simulation of the physical prototype.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="dark">
-      <body
-        className={`${inter.variable} ${orbitron.variable} antialiased bg-tactical-bg text-tactical-text`}
-      >
-        <div className="fixed inset-0 crt-overlay z-50 pointer-events-none opacity-20"></div>
-        {children}
-      </body>
+    <html lang="en" className={`${inter.variable} ${plexMono.variable}`}>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
