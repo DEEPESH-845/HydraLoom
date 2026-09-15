@@ -20,8 +20,8 @@ export function CameraFeed() {
   const { frame, x, y } = useSimStore(useShallow((s) => ({ frame: s.telemetry.camera.frame, x: s.telemetry.gantry.x, y: s.telemetry.gantry.y })));
 
   return (
-    <div className="border border-line">
-      <div className="flex items-center justify-between gap-2 border-b border-line bg-panel/92 px-2.5 py-1.5">
+    <div className="panel border-line-strong">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-2.5 py-1.5">
         <div className="flex items-center gap-2 whitespace-nowrap">
           <span className="label text-text">Camera feed</span>
           <span className="sim-tag">SIMULATED</span>
@@ -35,23 +35,26 @@ export function CameraFeed() {
         </span>
       </div>
 
-      <div id={FEED_ELEMENT_ID} className="relative w-full overflow-hidden" style={{ aspectRatio: "4 / 3", background: "transparent" }}>
-        {/* lens fall-off so the inset reads as a camera, not a viewport */}
-        <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.38) 100%)" }} />
-        {/* crosshair */}
-        <div className="pointer-events-none absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-teal/70" />
-        <div className="pointer-events-none absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 bg-teal/70" />
-        {/* frame corners */}
-        <div className="pointer-events-none absolute left-1 top-1 h-2 w-2 border-l border-t border-line-strong" />
-        <div className="pointer-events-none absolute right-1 top-1 h-2 w-2 border-r border-t border-line-strong" />
-        <div className="pointer-events-none absolute bottom-1 left-1 h-2 w-2 border-b border-l border-line-strong" />
-        <div className="pointer-events-none absolute bottom-1 right-1 h-2 w-2 border-b border-r border-line-strong" />
-        {/* position readout */}
-        <div className="value pointer-events-none absolute bottom-1.5 left-2 bg-ground/70 px-1 text-[10px] text-teal max-[999px]:hidden">
-          X {f1(x)}&nbsp;&nbsp;Y {f1(y)} cm
+      {/* The render is inset in the opaque panel so the feed reads as an instrument, not a hole into the 3D room. */}
+      <div className="p-1.5">
+        <div id={FEED_ELEMENT_ID} className="relative w-full overflow-hidden border border-line" style={{ aspectRatio: "4 / 3", background: "transparent" }}>
+          {/* a shade darker than the lab view, plus lens fall-off, so the inset reads as a camera, not a viewport */}
+          <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse at center, rgba(0,0,0,0.22) 50%, rgba(0,0,0,0.55) 100%)" }} />
+          {/* crosshair */}
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-teal/70" />
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 bg-teal/70" />
+          {/* frame corners */}
+          <div className="pointer-events-none absolute left-1 top-1 h-2 w-2 border-l border-t border-line-strong" />
+          <div className="pointer-events-none absolute right-1 top-1 h-2 w-2 border-r border-t border-line-strong" />
+          <div className="pointer-events-none absolute bottom-1 left-1 h-2 w-2 border-b border-l border-line-strong" />
+          <div className="pointer-events-none absolute bottom-1 right-1 h-2 w-2 border-b border-r border-line-strong" />
+          {/* position readout */}
+          <div className="value pointer-events-none absolute bottom-1.5 left-2 bg-ground/70 px-1 text-[10px] text-teal max-[999px]:hidden">
+            X {f1(x)}&nbsp;&nbsp;Y {f1(y)} cm
+          </div>
+          <div className="label pointer-events-none absolute right-2 top-1.5 bg-ground/70 px-1 text-[9px]">CAM D</div>
+          <BoundingBoxes />
         </div>
-        <div className="label pointer-events-none absolute right-2 top-1.5 bg-ground/70 px-1 text-[9px]">CAM D</div>
-        <BoundingBoxes />
       </div>
     </div>
   );

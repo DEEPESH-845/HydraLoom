@@ -273,10 +273,10 @@ export function CameraRig() {
       enableDamping
       dampingFactor={0.08}
       target={[0.12, 0.2, 0]}
-      minDistance={0.25}
-      maxDistance={6}
-      minPolarAngle={0.004}
-      maxPolarAngle={Math.PI / 2 + 0.22}
+      minDistance={0.08}
+      maxDistance={14}
+      minPolarAngle={0}
+      maxPolarAngle={Math.PI}
       enablePan
       panSpeed={0.6}
       rotateSpeed={0.7}
