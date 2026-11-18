@@ -92,6 +92,17 @@ export function freeRect(width: number, height: number): FreeRect {
   return { x0: FALLBACK.left, y0: FALLBACK.top, x1: width - FALLBACK.column, y1: height - FALLBACK.card };
 }
 
+/** Until this time (performance.now ms) a quiet moment in the overlay layout corrects any leftover framing difference. */
+let armedUntil = 0;
+
+/**
+ * Opens the window in which the overlay observer corrects residual layout differences: a scene change or a refit
+ * starts a transition (card swap, column resize) that can arrive in several steps, each under the refit threshold.
+ */
+export function armOverlaySettle(ms = 1500): void {
+  armedUntil = Math.max(armedUntil, performance.now() + ms);
+}
+
 /**
  * Keeps the cached free rect current and calls back when it changed materially (a scene card of a different
  * height, a resize, the compact layout kicking in). Small content changes inside a card are ignored so the
@@ -101,15 +112,36 @@ export function observeOverlay(onChange: (r: FreeRect) => void, threshold = 80):
   // Compared against the last rect that was notified, not the previous sample, so a width animated over
   // many small frames (the VISION column growing 300 to 440 px) still crosses the threshold.
   let notified: FreeRect | null = null;
+  let trailing = 0;
+  const differs = (a: FreeRect, b: FreeRect, by: number) =>
+    Math.abs(a.x0 - b.x0) > by || Math.abs(a.x1 - b.x1) > by || Math.abs(a.y0 - b.y0) > by || Math.abs(a.y1 - b.y1) > by;
+  // Inside an armed transition window the layout is re-read whenever it has been still for a moment, and any
+  // leftover difference is notified too. Otherwise a refit that fires part way through a panel animation, or a swap
+  // that lands in steps each under the threshold, leaves the framing depending on timing. Outside the window, content
+  // changes that never cross the threshold (rows appearing during a scan) are still ignored.
+  const settle = () => {
+    trailing = 0;
+    if (performance.now() > armedUntil) return;
+    const r = measureFreeRect();
+    if (!r) return;
+    measured = r;
+    if (notified && differs(notified, r, 1)) {
+      notified = r;
+      onChange(r);
+    }
+  };
   const update = () => {
     const r = measureFreeRect();
     if (!r) return;
     measured = r;
     const n = notified;
-    if (!n || Math.abs(n.x0 - r.x0) > threshold || Math.abs(n.x1 - r.x1) > threshold || Math.abs(n.y0 - r.y0) > threshold || Math.abs(n.y1 - r.y1) > threshold) {
+    if (!n || differs(n, r, threshold)) {
       notified = r;
+      armOverlaySettle();
       onChange(r);
     }
+    window.clearTimeout(trailing);
+    trailing = window.setTimeout(settle, 250);
   };
   const ro = new ResizeObserver(update);
   let raf = 0;
@@ -127,6 +159,7 @@ export function observeOverlay(onChange: (r: FreeRect) => void, threshold = 80):
   window.addEventListener("resize", update);
   return () => {
     cancelAnimationFrame(raf);
+    window.clearTimeout(trailing);
     ro.disconnect();
     window.removeEventListener("resize", update);
   };

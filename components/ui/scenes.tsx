@@ -2,11 +2,13 @@
 
 import clsx from "clsx";
 import { Home, Play, RotateCcw, Square } from "lucide-react";
-import { useState, type MouseEvent } from "react";
+import { useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { GANTRY, TEST } from "@/lib/sim/constants";
 import { useSimStore, type ComponentId } from "@/lib/sim/store";
 import { ACTIONS, type Action, type TestResult } from "@/lib/sim/types";
+import { visibilityRange, waterOptics } from "@/lib/optics/water";
+import { ENVIRONMENT_IDS, ENVIRONMENTS, environmentNtu, environmentWater, type Environment, type EnvironmentId } from "@/lib/sim/environments";
 import { Btn, CardHead, Chain, Chip, ObjectChips, clampNum, f1, f2, isTargetClass, pad2, pct, signed, useObjects } from "./shared";
 
 /** Shown once a test has finished and nothing else is running. */
@@ -68,11 +70,31 @@ const MAPPING: [string, string][] = [
   ["Test objects", "3D printed obstacles on sand"],
 ];
 
+/** Substrate and set-up the tank carries for each emulated environment. */
+const TANK_SETUP: Record<EnvironmentId, string> = {
+  tank: "120 x 60 x 60 cm glass tank, 50 cm of water, sand floor.",
+  harbor: "Same tank set up as harbour water: dark organic mud, shell grit, scale pilings, a tyre and chain in the margins.",
+  river: "Same tank set up as river water: sand and gravel bed, a slow flume current, a scale bridge pier and a branch.",
+  deepsea: "Same tank set up as the deep sea: pale ooze with manganese nodules, lab lights off, only the rig's lamps.",
+};
+
+/** The aquarium row says how the tank is set up for the current environment; the rest of the rig is unchanged. */
+function siteRow(c: (typeof COMPONENTS)[number], env: Environment): { name: string; text: string } {
+  if (c.id === "aquarium") return { name: c.name, text: TANK_SETUP[env.id] };
+  return c;
+}
+
 export function SystemCard() {
+  const env = ENVIRONMENTS[useSimStore((s) => s.scenario.environment)];
   const setHighlight = useSimStore((s) => s.setHighlight);
   const highlight = useSimStore((s) => s.highlight);
   const [sticky, setSticky] = useState<ComponentId | null>(null);
   const [mapping, setMapping] = useState(false);
+  const toggle = (id: ComponentId) => {
+    const next = sticky === id ? null : id;
+    setSticky(next);
+    setHighlight(next);
+  };
 
   return (
     <div>
@@ -87,18 +109,24 @@ export function SystemCard() {
                 "grid cursor-pointer grid-cols-[22px_1fr] gap-x-1.5 border-b border-line py-1 pr-1 pl-1 transition-colors duration-100",
                 on ? "bg-panel-2" : "hover:bg-panel-2/60",
               )}
+              role="button"
+              tabIndex={0}
+              aria-pressed={sticky === c.id}
               onMouseEnter={() => setHighlight(c.id)}
               onMouseLeave={() => setHighlight(sticky)}
-              onClick={() => {
-                const next = sticky === c.id ? null : c.id;
-                setSticky(next);
-                setHighlight(next);
+              onFocus={() => setHighlight(c.id)}
+              onBlur={() => setHighlight(sticky)}
+              onClick={() => toggle(c.id)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                toggle(c.id);
               }}
             >
               <span className={clsx("value text-[11px]", on ? "text-teal" : "text-dim")}>{pad2(i + 1)}</span>
-              <span className={clsx("label", on ? "text-teal" : "text-text")}>{c.name}</span>
+              <span className={clsx("label", on ? "text-teal" : "text-text")}>{siteRow(c, env).name}</span>
               <span />
-              <span className="text-[11px] leading-snug text-muted">{c.text}</span>
+              <span className="text-[11px] leading-snug text-muted">{siteRow(c, env).text}</span>
             </li>
           );
         })}
@@ -196,16 +224,35 @@ function XYPad() {
   const px = (x: number) => (x / GANTRY.travelX) * 100;
   const py = (y: number) => (y / GANTRY.travelY) * 100;
 
-  const onClick = (e: MouseEvent<HTMLDivElement>) => {
+  const moveToPointer = (e: PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const x = clampNum(((e.clientX - r.left) / r.width) * GANTRY.travelX, 0, GANTRY.travelX);
     const y = clampNum(((e.clientY - r.top) / r.height) * GANTRY.travelY, 0, GANTRY.travelY);
     moveGantryTo(Math.round(x * 10) / 10, Math.round(y * 10) / 10);
   };
+  // Press to send the carriage, keep the button down and drag to steer it live; the motion profile still limits speed.
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    moveToPointer(e);
+  };
+  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) moveToPointer(e);
+  };
+  // Arrow keys jog one controller step (5 cm) from the current target; Shift jogs 1 cm.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const d = e.shiftKey ? 1 : GANTRY.stepCm;
+    const dx = e.key === "ArrowRight" ? d : e.key === "ArrowLeft" ? -d : 0;
+    const dy = e.key === "ArrowDown" ? d : e.key === "ArrowUp" ? -d : 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    e.stopPropagation(); // arrows otherwise switch scenes
+    moveGantryTo(clampNum(g.x.target + dx, 0, GANTRY.travelX), clampNum(g.y.target + dy, 0, GANTRY.travelY));
+  };
 
   return (
     <div
-      className="relative shrink-0 cursor-crosshair border border-line-strong bg-panel-2/60"
+      className="relative shrink-0 cursor-crosshair touch-none border border-line-strong bg-panel-2/60"
       style={{
         width: PAD_W,
         height: PAD_H,
@@ -213,7 +260,12 @@ function XYPad() {
         backgroundSize: `${PAD_W / 10}px ${PAD_H / 4}px`,
         backgroundPosition: "-1px -1px", // the first grid line would otherwise double the border
       }}
-      onClick={onClick}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onKeyDown={onKeyDown}
+      tabIndex={0}
+      role="group"
+      aria-label="Gantry XY pad: click or drag to move the carriage, arrow keys jog 5 cm, Shift and arrow 1 cm"
       title="Click to move the gantry"
     >
       {TEST.scanWaypoints.map(([x, y]) => (
@@ -428,6 +480,45 @@ function KV({ k, v, tone }: { k: string; v: string; tone?: string }) {
 
 // ---------------------------------------------------------------- 06 SCENARIO
 
+const fmtNtu = (ntu: number) => `${ntu < 10 ? ntu.toFixed(1) : ntu.toFixed(0)} NTU`;
+
+/** Turbidity in NTU with the distance at which contrast drops to 2 percent, from the water model in lib/optics. */
+function turbidityLabel(env: Environment, turbidity: number): string {
+  const vis = visibilityRange(waterOptics(environmentWater(env, turbidity)).c[1]);
+  const range = vis >= 10 ? ">10 m" : vis >= 1 ? `${vis.toFixed(1)} m` : `${Math.round(vis * 100)} cm`;
+  return `${fmtNtu(environmentNtu(env, turbidity))} · sees ${range}`;
+}
+
+/** Segmented picker for the water the rig is placed in. Selecting one also applies its default turbidity and lighting. */
+function EnvironmentPicker({ value, onPick }: { value: EnvironmentId; onPick: (id: EnvironmentId) => void }) {
+  return (
+    <div>
+      <div className="label mb-1">Environment</div>
+      <div className="grid grid-cols-4" role="group" aria-label="Environment">
+        {ENVIRONMENT_IDS.map((id, i) => {
+          const on = id === value;
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onPick(id)}
+              className={clsx(
+                "btn relative min-w-0 truncate px-1! py-1.5! text-center hover:z-10 focus-visible:z-20",
+                i > 0 && "-ml-px",
+                on && "btn-active z-10 bg-panel",
+              )}
+            >
+              {ENVIRONMENTS[id].name}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-[12px] leading-snug text-muted">{ENVIRONMENTS[value].problem}</p>
+    </div>
+  );
+}
+
 function Slider({ label, value, min, max, step, show, onChange }: { label: string; value: number; min: number; max: number; step: number; show: string; onChange: (v: number) => void }) {
   return (
     <label className="block">
@@ -490,17 +581,19 @@ function ObjectRow({ index }: { index: number }) {
 }
 
 export function ScenarioCard() {
-  const sc = useSimStore(useShallow((s) => ({ turbidity: s.scenario.turbidity, lighting: s.scenario.lighting, threshold: s.scenario.threshold, gantrySpeed: s.scenario.gantrySpeed, count: s.scenario.objects.length })));
+  const sc = useSimStore(useShallow((s) => ({ environment: s.scenario.environment, turbidity: s.scenario.turbidity, lighting: s.scenario.lighting, threshold: s.scenario.threshold, gantrySpeed: s.scenario.gantrySpeed, count: s.scenario.objects.length })));
   const run = useSimStore(useShallow((s) => ({ phase: s.phase, events: s.events.length })));
   const { setScenario, runTest, reset, setScene } = useSimStore(useShallow((s) => ({ setScenario: s.setScenario, runTest: s.runTest, reset: s.reset, setScene: s.setScene })));
   const running = run.phase === "HOMING" || run.phase === "SCANNING" || run.phase === "DETECTING" || run.phase === "TRACKING";
+  const env = ENVIRONMENTS[sc.environment];
 
   return (
     <div>
       <CardHead title="Test scenario" note="Water, light and detector settings apply immediately, including to a running test. Object positions are gantry cm." />
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 max-[759px]:grid-cols-1">
-        <Slider label="Turbidity" value={sc.turbidity} min={0} max={1} step={0.05} show={f2(sc.turbidity)} onChange={(v) => setScenario({ turbidity: v })} />
-        <Slider label="Lighting" value={sc.lighting} min={0} max={1} step={0.05} show={f2(sc.lighting)} onChange={(v) => setScenario({ lighting: v })} />
+      <EnvironmentPicker value={sc.environment} onPick={(environment) => setScenario({ environment })} />
+      <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 max-[759px]:grid-cols-1">
+        <Slider label="Turbidity" value={sc.turbidity} min={0} max={1} step={0.05} show={turbidityLabel(env, sc.turbidity)} onChange={(v) => setScenario({ turbidity: v })} />
+        <Slider label={env.lightingLabel} value={sc.lighting} min={0} max={1} step={0.05} show={f2(sc.lighting)} onChange={(v) => setScenario({ lighting: v })} />
         <Slider label="Detection threshold" value={sc.threshold} min={0.3} max={0.95} step={0.05} show={pct(sc.threshold, 0)} onChange={(v) => setScenario({ threshold: v })} />
         <Slider label="Gantry speed" value={sc.gantrySpeed} min={0.2} max={1} step={0.05} show={pct(sc.gantrySpeed, 0)} onChange={(v) => setScenario({ gantrySpeed: v })} />
       </div>
@@ -543,6 +636,7 @@ export function ResultMetrics({ result, previous }: { result: TestResult; previo
   const objects = useObjects();
   const targetLabel = objects.find((o) => o.id === result.targetId)?.label ?? "NONE";
   const p = previous ?? undefined;
+  const env = ENVIRONMENTS[result.environment] ?? ENVIRONMENTS.tank; // results saved before environments existed are tank runs
   const metrics: [string, string, string | undefined, string | null][] = [
     ["Objects detected", pad2(result.objectsDetected), undefined, delta(result.objectsDetected, p?.objectsDetected, (d) => signed(d, 0))],
     ["Successful", pad2(result.successfulDetections), "text-teal", delta(result.successfulDetections, p?.successfulDetections, (d) => signed(d, 0))],
@@ -567,9 +661,14 @@ export function ResultMetrics({ result, previous }: { result: TestResult; previo
           </div>
         ))}
       </div>
-      <div className="value mt-1.5 text-[10px] text-muted">
-        <span className="label">Scenario</span>&nbsp;&nbsp;turbidity {f2(result.turbidity)}&nbsp;&nbsp;light {f2(result.lighting)}&nbsp;&nbsp;threshold {pct(result.threshold, 0)}
-        {previous && <span className="text-dim">&nbsp;&nbsp;deltas vs previous run</span>}
+      {/* each name and value stays on one line; the pairs wrap as units in a narrow card */}
+      <div className="value mt-1.5 flex flex-wrap items-baseline gap-x-3 text-[10px] text-muted">
+        <span className="label">Scenario</span>
+        <span className="whitespace-nowrap">{env.name}</span>
+        <span className="whitespace-nowrap">turbidity {fmtNtu(environmentNtu(env, result.turbidity))}</span>
+        <span className="whitespace-nowrap">light {f2(result.lighting)}</span>
+        <span className="whitespace-nowrap">threshold {pct(result.threshold, 0)}</span>
+        {previous && <span className="whitespace-nowrap text-dim">deltas vs previous run</span>}
       </div>
     </div>
   );

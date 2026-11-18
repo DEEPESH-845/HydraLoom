@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "./environments";
 export type ObjectType = "SHIPWRECK" | "MINE" | "DEBRIS";
 export type DetectedClass = ObjectType | "UNKNOWN";
 
@@ -90,6 +91,8 @@ export interface RLState {
 
 export interface Scenario {
   objects: TestObject[];
+  /** which water the rig stands in: lib/sim/environments.ts */
+  environment: EnvironmentId;
   /** 0..1 */
   turbidity: number;
   /** 0..1 */
@@ -113,6 +116,7 @@ export interface TestResult {
   durationS: number;
   targetId: string | null;
   /** scenario parameters the run used */
+  environment: EnvironmentId;
   turbidity: number;
   lighting: number;
   threshold: number;

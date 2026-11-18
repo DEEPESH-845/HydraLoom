@@ -34,10 +34,10 @@ export const DETECTION = {
   lockSeconds: 0.6,
   classifyThreshold: 0.65, // below this the reported class degrades
   // Geometry penalties are additive; light and water are multiplicative, so no light sees nothing
-  // and fully silted water sees nothing at the default threshold. Calibrated in docs/BLUEPRINT.md 4.2.
+  // and fully silted water sees nothing. The water term is lib/optics/water.ts waterDetectability.
+  // Calibrated in docs/BLUEPRINT.md 4.2.
   centeringWeight: 0.3,
   burialWeight: 0.15,
-  turbidityK: 1.1, // exp(-k * turbidity^2 * distance / lensHeight)
   lightingGamma: 0.3, // lighting^gamma
   minVisibleFraction: 0.3, // of the projected box inside the frame
   jitter: 0.01,

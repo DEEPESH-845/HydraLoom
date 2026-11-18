@@ -47,6 +47,12 @@ interface SimStore extends SimSnapshot {
   demo: DemoState;
   /** set by the UI when the user wants to see the "simulation to field" closing moment */
   showVision: boolean;
+  /** false while the 3D site is being swapped for another environment; the UI veils the view meanwhile */
+  siteReady: boolean;
+  /** free-explore mode: the scene panels step aside so the whole canvas is the machine */
+  exploring: boolean;
+  /** bumps on every "recenter view" request so the camera rig refits the current preset even after the user orbited */
+  viewEpoch: number;
 
   publish: () => void;
   setScene: (scene: SceneId) => void;
@@ -68,6 +74,9 @@ interface SimStore extends SimSnapshot {
   setDemoTime: (t: number) => void;
   setDemoPhase: (phase: number) => void;
   setShowVision: (v: boolean) => void;
+  setExploring: (v: boolean) => void;
+  setSiteReady: (v: boolean) => void;
+  recenterView: () => void;
 }
 
 function snapshot(engine: SimEngine): SimSnapshot {
@@ -96,6 +105,9 @@ export const useSimStore = create<SimStore>((set, get) => {
     selectedObjectId: null,
     demo: { active: false, paused: false, t: 0, phase: 0, run: 0 },
     showVision: false,
+    siteReady: true,
+    exploring: false,
+    viewEpoch: 0,
 
     publish,
     setScene: (scene) => set({ scene, cameraPreset: SCENE_CAMERA[scene], highlight: null }),
@@ -132,10 +144,13 @@ export const useSimStore = create<SimStore>((set, get) => {
       publish();
     },
     // Reset restores the lab (engine defaults, PARK, no history) and clears every UI selection.
+    // The chosen environment is context, like the scene: it stays, with that environment's default water and light.
     // scene and cameraPreset stay: the rail is navigation, not lab state, and the user pressed RESET from a card they expect to keep.
     // demo.run is a restart counter for the driver and is deliberately preserved.
     reset: () => {
+      const environment = engine.scenario.environment;
       engine.reset();
+      if (environment !== engine.scenario.environment) engine.setScenario({ environment });
       set({ selectedObjectId: null, highlight: null, showVision: false, demo: { active: false, paused: false, t: 0, phase: 0, run: get().demo.run } });
       publish();
     },
@@ -149,7 +164,7 @@ export const useSimStore = create<SimStore>((set, get) => {
     },
     startDemo: () => {
       engine.reset();
-      set({ demo: { active: true, paused: false, t: 0, phase: 0, run: get().demo.run + 1 }, scene: 1, cameraPreset: "A", selectedObjectId: null, showVision: false });
+      set({ demo: { active: true, paused: false, t: 0, phase: 0, run: get().demo.run + 1 }, scene: 1, cameraPreset: "A", selectedObjectId: null, showVision: false, exploring: false });
       publish();
     },
     pauseDemo: (paused) => set({ demo: { ...get().demo, paused } }),
@@ -161,5 +176,14 @@ export const useSimStore = create<SimStore>((set, get) => {
     setDemoTime: (t) => set({ demo: { ...get().demo, t } }),
     setDemoPhase: (phase) => set({ demo: { ...get().demo, phase } }),
     setShowVision: (showVision) => set({ showVision }),
+    // The demo directs the camera and narrates through the card, so it cannot run with the panels hidden.
+    // Leaving explore puts the panels back, so the view returns to the scene's framing around them.
+    setSiteReady: (siteReady) => set({ siteReady }),
+    setExploring: (exploring) => {
+      const next = exploring && !get().demo.active;
+      if (next === get().exploring) return;
+      set(next ? { exploring: true } : { exploring: false, viewEpoch: get().viewEpoch + 1 });
+    },
+    recenterView: () => set({ viewEpoch: get().viewEpoch + 1 }),
   };
 });

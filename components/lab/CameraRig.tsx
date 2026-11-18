@@ -8,9 +8,9 @@ import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { CAMERA, GANTRY, TANK, gantryToWorld } from "@/lib/sim/constants";
 import { useSimStore, type CameraPreset } from "@/lib/sim/store";
-import { SHELF } from "./Electronics";
+import { OVERHEAD_ARM_Y, OVERHEAD_LAYER, OVERHEAD_MAST_X, SHELF } from "./Electronics";
 import { FOOT_HALF_H, FOOT_HALF_W } from "./Overlays";
-import { freeRect, observeOverlay, refreshFreeRect } from "./util";
+import { type FreeRect, armOverlaySettle, freeRect, observeOverlay, refreshFreeRect } from "./util";
 
 type V3 = [number, number, number];
 
@@ -30,6 +30,8 @@ interface Preset {
   follow?: boolean;
   /** never closer than this, so a low outside-the-glass shot cannot end up inside the tank */
   minDist?: number;
+  /** hide the overhead ground-truth rig: it would sit between a top-down lens and the tank */
+  hideOverhead?: boolean;
 }
 
 const box = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): V3[] => [
@@ -49,9 +51,13 @@ const HOUSING_R = 0.03;
 
 const PRESETS: Record<CameraPreset, Preset> = {
   // three-quarter overview from front right, about 21 degrees above the rim: tank on its table, gantry frame, electronics shelf
-  A: { dir: [1.78, 0.95, 1.7], points: box(-0.66, SHELF.x1 + 0.01, TABLE_TOP, FRAME_TOP, -0.36, 0.37) },
+  // the overhead ground-truth mast and arm are part of the machine, so the frame includes their top
+  A: {
+    dir: [1.78, 0.95, 1.7],
+    points: [...box(-0.66, SHELF.x1 + 0.01, TABLE_TOP, FRAME_TOP, -0.36, 0.37), [OVERHEAD_MAST_X, OVERHEAD_ARM_Y + 0.02, 0], [0, OVERHEAD_ARM_Y + 0.02, 0]],
+  },
   // top-down, camera just off the +Z side so screen right = +X and screen down = +Z like the feed
-  B: { dir: [0, 1, 0.012], points: box(-0.66, 0.66, 0, FRAME_TOP, -0.37, 0.37) },
+  B: { dir: [0, 1, 0.012], hideOverhead: true, points: box(-0.66, 0.66, 0, FRAME_TOP, -0.37, 0.37) },
   // underwater side view through the +Z glass: the water volume
   C: { dir: [-0.35, 0.18, 1], points: box(-TANK.length / 2, TANK.length / 2, 0, TANK.waterLevel, -TANK.width / 2, TANK.width / 2) },
   // detection camera context: footprint, housing and carriage seen from the +Z side, steep enough to clear the
@@ -76,12 +82,15 @@ gsap.ticker.lagSmoothing(0);
 
 /** Carriage reference point: the lens, on the mast axis. */
 function carriagePoint(out: THREE.Vector3) {
-  const g = useSimStore.getState().engine.gantry;
-  const [wx, wz] = gantryToWorld(g.x.pos, g.y.pos);
+  const p = useSimStore.getState().engine.renderPose();
+  const [wx, wz] = gantryToWorld(p.x, p.y);
   return out.set(wx, CAMERA.lensHeight, wz);
 }
 
 const fitCam = new THREE.PerspectiveCamera(MAIN_FOV, 1, 0.02, 40);
+
+/** Orbit damping per frame at 60 Hz; CameraRig rescales it by the real frame time. */
+const ORBIT_DAMPING_60HZ = 0.08;
 const fv = new THREE.Vector3();
 const fRight = new THREE.Vector3();
 const fUp = new THREE.Vector3();
@@ -105,15 +114,23 @@ function fitRect(width: number, height: number) {
  * A few fixed-point iterations: shift the target by the bbox centre error, scale the distance by the
  * bbox size error. Deterministic for a given viewport, so a preset always ends in the same pose.
  */
-function fit(preset: Preset, origin: THREE.Vector3 | null, width: number, height: number, outPos: THREE.Vector3, outTarget: THREE.Vector3) {
-  const rect = fitRect(width, height);
+function fit(
+  preset: Preset,
+  origin: THREE.Vector3 | null,
+  width: number,
+  height: number,
+  outPos: THREE.Vector3,
+  outTarget: THREE.Vector3,
+  override?: { dir?: THREE.Vector3; rect?: FreeRect },
+) {
+  const rect = override?.rect ?? fitRect(width, height);
   const cx = (rect.x0 + rect.x1) / width - 1;
   const cy = 1 - (rect.y0 + rect.y1) / height;
   const hw = ((rect.x1 - rect.x0) / width) * FILL;
   const hh = ((rect.y1 - rect.y0) / height) * FILL;
-  const dir = fv.set(...preset.dir).normalize().clone();
+  const dir = override?.dir ? override.dir.clone().normalize() : fv.set(...preset.dir).normalize().clone();
   const sx = origin && origin.x < 0 ? -1 : 1; // follow shots stand on the outer X side of the carriage
-  dir.x *= sx;
+  if (!override?.dir) dir.x *= sx;
   const pts = preset.points.map(([x, y, z]) => (origin ? new THREE.Vector3(origin.x + x * sx, y, origin.z + z) : new THREE.Vector3(x, y, z)));
 
   outTarget.set(0, 0, 0);
@@ -147,15 +164,49 @@ function fit(preset: Preset, origin: THREE.Vector3 | null, width: number, height
   outPos.copy(outTarget).addScaledVector(dir, dist);
 }
 
+/**
+ * Screen rect for free exploration: the panels are hidden, so the machine gets the whole window below the header,
+ * minus the explore hint strip at the bottom. Centred, so the orbit pivot sits in the middle of the screen.
+ */
+function exploreRect(width: number, height: number): FreeRect {
+  const header = document.querySelector('[data-lab="header"]')?.getBoundingClientRect();
+  const top = (header?.bottom ?? 48) + 12;
+  const bottom = height - 84;
+  const inset = Math.max(16, (width - 2 * Math.min(width / 2, 900)) / 2);
+  // keep the band symmetric about the screen centre so the pivot lands mid-window
+  const half = Math.min(height / 2 - top, bottom - height / 2);
+  return { x0: inset, x1: width - inset, y0: height / 2 - half, y1: height / 2 + half };
+}
+
+/**
+ * Drops any orbit velocity the damping still carries from the user's last drag. Without this the leftover delta keeps
+ * rotating the camera while a preset or focus tween runs, and the move lands a few centimetres off its pose.
+ */
+function flushDamping(c: OrbitControlsImpl) {
+  c.enableDamping = false;
+  c.update();
+  c.enableDamping = true;
+}
+
 export function CameraRig() {
   const controls = useRef<OrbitControlsImpl>(null);
   const camera = useThree((s) => s.camera) as THREE.PerspectiveCamera;
   const size = useThree((s) => s.size);
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
   const preset = useSimStore((s) => s.cameraPreset);
+  const viewEpoch = useSimStore((s) => s.viewEpoch);
   // bumps whenever the DOM overlay leaves a materially different free area (scene card height, compact layout, resize)
   const [layout, setLayout] = useState(0);
   useEffect(() => observeOverlay(() => setLayout((n) => n + 1)), []);
+  // A scene change swaps the card even when the preset stays (04 to 06), so the overlay settles toward the new layout.
+  const sceneId = useSimStore((s) => s.scene);
+  useEffect(() => armOverlaySettle(), [sceneId]);
   const tween = useRef<gsap.core.Tween | null>(null);
+  // Explore glide: eases the orbit pivot and distance toward the whole-machine framing while the user keeps orbiting.
+  // `userZoom` is set by any wheel or pinch: from then on the distance is the user's and the glide only centres.
+  const glide = useRef<{ target: THREE.Vector3; pos: THREE.Vector3; dir: THREE.Vector3; userZoom: boolean } | null>(null);
+  const exploring = useSimStore((s) => s.exploring);
   const following = useRef(false);
   const userMoved = useRef(false);
   const tmp = useMemo(
@@ -176,6 +227,7 @@ export function CameraRig() {
   useEffect(() => {
     camera.layers.enable(1); // mast and housing
     camera.layers.enable(2); // HUD overlays
+    camera.layers.enable(OVERHEAD_LAYER); // overhead ground-truth rig, disabled by top-down presets
   }, [camera]);
 
   // Dev only: lets browser tests read the live camera pose and orbit target.
@@ -186,6 +238,7 @@ export function CameraRig() {
   }, [camera]);
 
   const lastPreset = useRef<CameraPreset | null>(null);
+  const lastEpoch = useRef(0);
   const mountedAt = useRef(0);
   useEffect(() => {
     mountedAt.current = performance.now();
@@ -195,14 +248,22 @@ export function CameraRig() {
     if (!c) return;
     const { width: W, height: H } = size;
     refreshFreeRect();
-    // A resize or a card height change refits the preset unless the user has taken the camera; a preset change always does.
-    if (preset === lastPreset.current && userMoved.current) return;
+    // A resize or a card height change refits the preset unless the user has taken the camera; a preset change or a
+    // recenter request always does.
+    const recenter = viewEpoch !== lastEpoch.current;
+    lastEpoch.current = viewEpoch;
+    if (preset === lastPreset.current && userMoved.current && !recenter) return;
+    // While exploring the explore glide owns the view; leaving explore bumps the epoch and refits the scene preset.
+    if (useSimStore.getState().exploring) return;
     // the first fit, and any layout settling in the first second after mount, snaps instead of tweening
     const instant = lastPreset.current === null || performance.now() - mountedAt.current < 1000;
     lastPreset.current = preset;
     userMoved.current = false;
     tween.current?.kill();
+    flushDamping(c);
     const p = PRESETS[preset];
+    if (p.hideOverhead) camera.layers.disable(OVERHEAD_LAYER);
+    else camera.layers.enable(OVERHEAD_LAYER);
     following.current = !!p.follow;
     const origin = p.follow ? carriagePoint(tmp.anchor) : null;
     fit(p, origin, W, H, tmp.endPos, tmp.endTarget);
@@ -239,23 +300,138 @@ export function CameraRig() {
       tl.kill();
       tween.current = null;
     };
-  }, [preset, layout, camera, tmp, size]);
+  }, [preset, layout, camera, tmp, size, viewEpoch]);
 
   useEffect(() => {
     const c = controls.current;
     if (!c) return;
+    let gesture = false;
     const onStart = () => {
       tween.current?.kill();
       tween.current = null;
       userMoved.current = true;
+      gesture = true;
+    };
+    // The first real orbit, pan or zoom with mouse or trackpad enters explore mode: the panels step aside and the
+    // machine glides to the middle. A click without movement does not count.
+    const onChange = () => {
+      if (!gesture) return;
+      gesture = false;
+      const s = useSimStore.getState();
+      if (!s.exploring && !s.demo.active && !s.showVision) s.setExploring(true);
+    };
+    const onEnd = () => {
+      // wheel and pinch emit start, change and end inside one event, so only a drag that never moved resets here
+      gesture = false;
     };
     c.addEventListener("start", onStart);
-    return () => c.removeEventListener("start", onStart);
+    c.addEventListener("change", onChange);
+    c.addEventListener("end", onEnd);
+    return () => {
+      c.removeEventListener("start", onStart);
+      c.removeEventListener("change", onChange);
+      c.removeEventListener("end", onEnd);
+    };
   }, []);
 
-  // While a follow preset is active, translate the rig with the carriage. Orbiting still works.
-  useFrame(() => {
+  // Entering explore: frame the whole machine for the current line of sight in the uncovered window, then glide there.
+  useEffect(() => {
     const c = controls.current;
+    if (!c || !exploring) {
+      glide.current = null;
+      return;
+    }
+    following.current = false;
+    userMoved.current = true;
+    camera.layers.enable(OVERHEAD_LAYER); // explore shows the whole machine from any side; leaving refits the preset's layers
+    glide.current = { target: new THREE.Vector3(), pos: new THREE.Vector3(), dir: new THREE.Vector3(), userZoom: false };
+  }, [exploring, camera, size, viewEpoch]);
+
+  // A wheel tick or a two-finger touch means the user is choosing the distance; the glide stops dollying.
+  useEffect(() => {
+    const el = gl.domElement;
+    const own = () => {
+      if (glide.current) glide.current.userZoom = true;
+    };
+    const onTouch = (e: TouchEvent) => {
+      if (e.touches.length > 1) own();
+    };
+    el.addEventListener("wheel", own, { passive: true });
+    el.addEventListener("touchstart", onTouch, { passive: true });
+    return () => {
+      el.removeEventListener("wheel", own);
+      el.removeEventListener("touchstart", onTouch);
+    };
+  }, [gl]);
+
+  // Double-click any part of the machine to orbit around it: the clicked point becomes the orbit target and the camera
+  // closes in along its current line of sight. Glass, water and HUD overlays are looked through, not focused.
+  useEffect(() => {
+    const el = gl.domElement;
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const offset = new THREE.Vector3();
+    const onDbl = (e: MouseEvent) => {
+      const c = controls.current;
+      if (!c) return;
+      const r = el.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      ray.layers.mask = camera.layers.mask & ~(1 << 2);
+      const hit = ray.intersectObjects(scene.children, true).find((h) => {
+        const m = (h.object as THREE.Mesh).material as THREE.Material | undefined;
+        // every see-through layer (glass, water volume, surface, meniscus) is transparent without depth write
+        if (!(h.object as THREE.Mesh).isMesh || !m || (m.transparent && (m.opacity < 0.5 || !m.depthWrite))) return false;
+        // the raycaster ignores .visible, so a hidden part or a part under a hidden group must be skipped here
+        for (let o: THREE.Object3D | null = h.object; o; o = o.parent) if (!o.visible) return false;
+        return true;
+      });
+      if (!hit) return;
+      glide.current = null;
+      tween.current?.kill();
+      flushDamping(c);
+      userMoved.current = true;
+      following.current = false;
+      offset.subVectors(camera.position, c.target);
+      const dist = THREE.MathUtils.clamp(offset.length(), 0.3, 0.9);
+      offset.setLength(dist);
+      const from = { px: camera.position.x, py: camera.position.y, pz: camera.position.z, tx: c.target.x, ty: c.target.y, tz: c.target.z };
+      const to = { px: hit.point.x + offset.x, py: hit.point.y + offset.y, pz: hit.point.z + offset.z, tx: hit.point.x, ty: hit.point.y, tz: hit.point.z };
+      const s = { t: 0 };
+      tween.current = gsap.to(s, {
+        t: 1,
+        duration: 0.8,
+        ease: "power2.inOut",
+        onUpdate: () => {
+          camera.position.set(from.px + (to.px - from.px) * s.t, from.py + (to.py - from.py) * s.t, from.pz + (to.pz - from.pz) * s.t);
+          c.target.set(from.tx + (to.tx - from.tx) * s.t, from.ty + (to.ty - from.ty) * s.t, from.tz + (to.tz - from.tz) * s.t);
+        },
+        onComplete: () => (tween.current = null),
+      });
+    };
+    el.addEventListener("dblclick", onDbl);
+    return () => el.removeEventListener("dblclick", onDbl);
+  }, [gl, scene, camera]);
+
+  // While a follow preset is active, translate the rig with the carriage. Orbiting still works.
+  useFrame((_, dt) => {
+    const c = controls.current;
+    const g = glide.current;
+    // OrbitControls damps per update, so a fixed factor coasts 2.4 times shorter at 144 Hz than at 60 Hz. Scale it
+    // by the frame time so a flick of the mouse feels the same on every display (0.08 per 60 Hz frame).
+    if (c) c.dampingFactor = 1 - Math.pow(1 - ORBIT_DAMPING_60HZ, Math.min(dt, 0.1) * 60);
+    if (c && g && !tween.current) {
+      // Re-fit the whole machine for the live line of sight every frame, so rotation during the glide never pushes it
+      // off screen. Only the pivot and the distance ease; the user's rotation is never overridden.
+      g.dir.subVectors(camera.position, c.target);
+      const d = g.dir.length();
+      fit(PRESETS.A, null, size.width, size.height, g.pos, g.target, { dir: g.dir, rect: exploreRect(size.width, size.height) });
+      const goal = g.userZoom ? d : g.pos.distanceTo(g.target);
+      const k = 1 - Math.exp(-Math.min(dt, 0.1) * 5);
+      c.target.lerp(g.target, k);
+      camera.position.copy(c.target).addScaledVector(g.dir.divideScalar(d || 1), d + (goal - d) * k);
+      if (c.target.distanceToSquared(g.target) < 1e-8 && Math.abs(goal - d) < 1e-4) glide.current = null;
+    }
     if (!c || !following.current) return;
     carriagePoint(tmp.now);
     tmp.delta.subVectors(tmp.now, tmp.anchor);
@@ -271,7 +447,7 @@ export function CameraRig() {
       ref={controls}
       makeDefault
       enableDamping
-      dampingFactor={0.08}
+      dampingFactor={ORBIT_DAMPING_60HZ}
       target={[0.12, 0.2, 0]}
       minDistance={0.08}
       maxDistance={14}

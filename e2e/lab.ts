@@ -87,6 +87,30 @@ export class Lab {
     return this.page.getByRole("button", { name });
   }
 
+  /**
+   * Waits until the camera has stopped moving: no preset tween running and the pose unchanged across 600 ms.
+   * Software GL renders the first seconds slowly, so a fixed sleep can capture a tween half way; screenshots wait on this.
+   */
+  async settleCamera(timeout = 30_000) {
+    // Polled from Node: a waitForFunction predicate that returns a Promise counts as truthy at once and never waits.
+    const read = () =>
+      this.page.evaluate(() => {
+        const c = window.__labCamera;
+        if (!c) return null;
+        const p = c.camera.position;
+        return { moving: c.tweening(), x: p.x, y: p.y, z: p.z };
+      });
+    const end = Date.now() + timeout;
+    let prev = await read();
+    while (Date.now() < end) {
+      await this.page.waitForTimeout(600);
+      const cur = await read();
+      if (prev && cur && !prev.moving && !cur.moving && Math.abs(prev.x - cur.x) + Math.abs(prev.y - cur.y) + Math.abs(prev.z - cur.z) < 1e-4) return;
+      prev = cur;
+    }
+    throw new Error("camera did not settle");
+  }
+
   async scene(n: number) {
     await this.rail(new RegExp(`^0${n}`)).click();
     await this.waitFor((s, n) => s.scene === n, n);

@@ -5,8 +5,12 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import { GANTRY, TANK } from "@/lib/sim/constants";
 import { mulberry32 } from "@/lib/sim/rng";
+import type { EnvironmentId } from "@/lib/sim/environments";
 import { useSimStore } from "@/lib/sim/store";
 import { mergeBoxes, std, useHighlight } from "./util";
+import { weather } from "./weathering";
+import { Particles } from "./Particles";
+import { currentWater, waterTime } from "./water";
 
 const L = TANK.length;
 const W = TANK.width;
@@ -20,11 +24,22 @@ const INNER_L = L - 2 * G;
 const INNER_W = W - 2 * G;
 
 const CLEAR_WATER = new THREE.Color("#2f8a93");
-const MURKY_WATER = new THREE.Color("#5c6b3c");
-const CLEAR_SAND_TINT = new THREE.Color(0.86, 0.9, 0.9);
-const MURKY_SAND_TINT = new THREE.Color(0.62, 0.66, 0.5);
+const SAND_TINT = new THREE.Color(0.86, 0.9, 0.9);
 
 /* ---------- sand ---------- */
+
+/**
+ * Height of the rippled sand at a point inside the tank, without the per-vertex grain. Shared with the dressings
+ * (TankDressing.tsx) so stones and props sit on the floor rather than above or inside it.
+ */
+export function sandSurfaceY(x: number, z: number): number {
+  const ex = Math.min(1, (INNER_L / 2 - Math.abs(x)) / 0.06);
+  const ez = Math.min(1, (INNER_W / 2 - Math.abs(z)) / 0.06);
+  const fade = Math.max(0, Math.min(ex, ez));
+  const r1 = 0.005 * Math.sin((x * 0.7 + z) * 9 + 0.4);
+  const r2 = 0.004 * Math.sin((x - z * 0.5) * 13 + 1.1);
+  return (r1 + r2) * fade;
+}
 
 function buildSandGeometry() {
   const geo = new THREE.PlaneGeometry(INNER_L, INNER_W, 120, 60);
@@ -34,14 +49,9 @@ function buildSandGeometry() {
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = pos.getZ(i);
-    // fade ripples out over the last 6 cm so the edge meets the sand box cleanly
-    const ex = Math.min(1, (INNER_L / 2 - Math.abs(x)) / 0.06);
-    const ez = Math.min(1, (INNER_W / 2 - Math.abs(z)) / 0.06);
-    const fade = Math.max(0, Math.min(ex, ez));
-    const r1 = 0.005 * Math.sin((x * 0.7 + z) * 9 + 0.4);
-    const r2 = 0.004 * Math.sin((x - z * 0.5) * 13 + 1.1);
+    // ripples fade out over the last 6 cm so the edge meets the sand box cleanly (sandSurfaceY)
     const grain = (rand() - 0.5) * 0.0012;
-    pos.setY(i, (r1 + r2) * fade + grain);
+    pos.setY(i, sandSurfaceY(x, z) + grain);
   }
   geo.computeVertexNormals();
   return geo;
@@ -49,9 +59,7 @@ function buildSandGeometry() {
 
 function makeSandMaterial() {
   const uniforms = {
-    uTime: { value: 0 },
-    uCaustic: { value: 0.5 },
-    uTint: { value: CLEAR_SAND_TINT.clone() },
+    uTint: { value: SAND_TINT.clone() },
   };
   const mat = std({ color: "#8f7d5c", roughness: 0.95, metalness: 0 });
   mat.onBeforeCompile = (shader) => {
@@ -64,27 +72,17 @@ function makeSandMaterial() {
         "#include <common>",
         `#include <common>
         varying vec2 vSandXZ;
-        uniform float uTime;
-        uniform float uCaustic;
-        uniform vec3 uTint;
-        float caustic(vec2 p, float t) {
-          return sin(p.x + t * 0.9) * sin(p.y * 1.3 - t * 0.7)
-               + sin((p.x + p.y) * 0.7 + t * 0.5) * sin((p.x - p.y) * 0.9 - t * 0.8);
-        }`,
+        uniform vec3 uTint;`,
       )
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
-        float grain = fract(sin(dot(floor(vSandXZ * 900.0), vec2(12.9898, 78.233))) * 43758.5453);
-        diffuseColor.rgb *= 0.93 + 0.1 * grain;
-        vec2 p = vSandXZ * 70.0;
-        float c = caustic(p, uTime) + 0.5 * caustic(p * 2.1 + 3.0, uTime * 1.3);
-        c = pow(max(0.0, c * 0.5), 4.0);
-        diffuseColor.rgb += uCaustic * c * vec3(0.95, 0.97, 0.9);
         diffuseColor.rgb *= uTint;`,
       );
   };
   mat.customProgramCacheKey = () => "gantrylab-sand";
+  // grain and micro-relief from the band-limited weathering noise: organic up close, no shimmer at distance
+  weather(mat, { scale: 420, rust: 0, silt: 0, growth: 0.06, bump: 0.9, seed: 12 });
   return { mat, uniforms };
 }
 
@@ -137,50 +135,28 @@ void main() {
   gl_FragColor = vec4(col, clamp(a, 0.0, 0.9));
 }`;
 
-/* ---------- particles ---------- */
-
-const PARTICLE_VERT = /* glsl */ `
-uniform float uTime;
-uniform float uPixelRatio;
-attribute float seed;
-void main() {
-  vec3 p = position;
-  p.x += 0.012 * sin(uTime * 0.25 + seed * 6.28);
-  p.z += 0.010 * cos(uTime * 0.21 + seed * 9.4);
-  p.y += 0.008 * sin(uTime * 0.17 + seed * 3.1);
-  vec4 mv = modelViewMatrix * vec4(p, 1.0);
-  gl_PointSize = clamp(2.2 * uPixelRatio * (0.6 / -mv.z), 1.0, 3.5 * uPixelRatio);
-  gl_Position = projectionMatrix * mv;
-}`;
-
-const PARTICLE_FRAG = /* glsl */ `
-uniform float uOpacity;
-void main() {
-  vec2 d = gl_PointCoord - 0.5;
-  if (dot(d, d) > 0.25) discard;
-  gl_FragColor = vec4(0.85, 0.9, 0.88, uOpacity);
-}`;
-
-function buildParticles(count: number) {
-  const rand = mulberry32(99);
-  const pos = new Float32Array(count * 3);
-  const seed = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    pos[i * 3] = (rand() - 0.5) * (INNER_L - 0.04);
-    pos[i * 3 + 1] = 0.02 + rand() * (WL - 0.04);
-    pos[i * 3 + 2] = (rand() - 0.5) * (INNER_W - 0.04);
-    seed[i] = rand();
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute("seed", new THREE.BufferAttribute(seed, 1));
-  return geo;
-}
-
 /* ---------- component ---------- */
 
-export function Aquarium() {
-  const { glassMat, trimMat, meniscusMat, meniscus, waterMat, surfaceMat, particleMat, sand, seams, particles, update } = useMemo(() => {
+const PARTICLES_MIN: [number, number, number] = [-INNER_L / 2 + 0.02, 0.02, -INNER_W / 2 + 0.02];
+
+/**
+ * The floor each environment lays in the tank: the base colour and the weathering of the substrate.
+ * Lab sand; dark organic harbour mud with a growth film; warm river sand and gravel; pale abyssal ooze.
+ */
+const FLOOR: Record<EnvironmentId, { color: string; growth: number; bump: number; scale: number }> = {
+  tank: { color: "#8f7d5c", growth: 0.06, bump: 0.9, scale: 420 },
+  harbor: { color: "#4e493c", growth: 0.45, bump: 0.7, scale: 300 },
+  river: { color: "#7d6c52", growth: 0.15, bump: 1.5, scale: 360 },
+  deepsea: { color: "#b5ad99", growth: 0, bump: 0.5, scale: 260 },
+};
+
+/** A flume carries the river's current along the tank; the other waters are still. */
+const DRIFT: Record<EnvironmentId, [number, number]> = { tank: [0, 0], harbor: [0.002, 0.001], river: [0.035, 0], deepsea: [0.001, 0] };
+const PARTICLES_MAX: [number, number, number] = [INNER_L / 2 - 0.02, WL - 0.02, INNER_W / 2 - 0.02];
+
+/** The glass tank, its floor and its water. `env` is the environment being emulated inside it. */
+export function Aquarium({ env = "tank" }: { env?: EnvironmentId }) {
+  const { glassMat, trimMat, meniscusMat, meniscus, surfaceMat, sand, seams, update } = useMemo(() => {
     const glassMat = new THREE.MeshPhysicalMaterial({
       color: "#bcd8dd",
       transparent: true,
@@ -201,15 +177,6 @@ export function Aquarium() {
       { size: [0.002, 0.002, INNER_W], at: [INNER_L / 2 - 0.001, WL, 0] },
       { size: [0.002, 0.002, INNER_W], at: [-INNER_L / 2 + 0.001, WL, 0] },
     ]);
-    const waterMat = new THREE.MeshStandardMaterial({
-      color: CLEAR_WATER.clone(),
-      transparent: true,
-      opacity: 0.18,
-      roughness: 1,
-      metalness: 0,
-      side: THREE.BackSide,
-      depthWrite: false,
-    });
     const surfaceMat = new THREE.ShaderMaterial({
       vertexShader: SURFACE_VERT,
       fragmentShader: SURFACE_FRAG,
@@ -222,13 +189,6 @@ export function Aquarium() {
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
-    });
-    const particleMat = new THREE.ShaderMaterial({
-      vertexShader: PARTICLE_VERT,
-      fragmentShader: PARTICLE_FRAG,
-      uniforms: { uTime: { value: 0 }, uPixelRatio: { value: 1 }, uOpacity: { value: 0.3 } },
-      transparent: true,
-      depthWrite: false,
     });
     const seamH = WALL_H;
     const seamY = BOTTOM + seamH / 2;
@@ -253,31 +213,35 @@ export function Aquarium() {
     ]);
     const sand = { geo: buildSandGeometry(), ...makeSandMaterial() };
     /** Per-frame uniform and material updates, driven by the scenario. */
-    const update = (t: number, turbidity: number, lighting: number, pixelRatio: number) => {
-      sand.uniforms.uTime.value = t;
-      sand.uniforms.uCaustic.value = 0.35 * lighting * (1 - 0.8 * turbidity);
-      sand.uniforms.uTint.value.lerpColors(CLEAR_SAND_TINT, MURKY_SAND_TINT, turbidity);
-      waterMat.color.lerpColors(CLEAR_WATER, MURKY_WATER, turbidity);
-      waterMat.opacity = 0.08 + 0.5 * turbidity;
-      surfaceMat.uniforms.uTime.value = t;
-      surfaceMat.uniforms.uColor.value.lerpColors(CLEAR_WATER, MURKY_WATER, turbidity);
-      surfaceMat.uniforms.uOpacity.value = 0.12 + 0.45 * turbidity;
+    // Water colour and attenuation come from the optics model (components/lab/water.ts), which also shades every
+    // submerged material; these self-shaded parts read the same numbers.
+    const surfaceColor = new THREE.Color();
+    const update = (t: number, lighting: number, environment: EnvironmentId) => {
+      const floor = FLOOR[environment];
+      sand.mat.color.set(floor.color);
+      const w = sand.mat.userData.weather as { uWGrowth: { value: number }; uWBump: { value: number }; uWScale: { value: number } };
+      w.uWGrowth.value = floor.growth;
+      w.uWBump.value = floor.bump;
+      w.uWScale.value = floor.scale;
+      const { optics } = currentWater;
+      const [, cG] = optics.c;
+      surfaceMat.uniforms.uTime.value = waterTime(t);
+      // surface body colour is the hue of the deep-water reflectance; opacity is the haze of the top 10 cm
+      const [r, g, b] = optics.rInf;
+      const peak = Math.max(r, g, b, 1e-6);
+      surfaceColor.setRGB((0.5 * r) / peak, (0.5 * g) / peak, (0.5 * b) / peak, THREE.LinearSRGBColorSpace);
+      surfaceMat.uniforms.uColor.value.copy(surfaceColor);
+      surfaceMat.uniforms.uOpacity.value = 0.1 + 0.5 * (1 - Math.exp(-cG * 0.1));
       surfaceMat.uniforms.uLight.value = lighting;
-      particleMat.uniforms.uTime.value = t;
-      particleMat.uniforms.uPixelRatio.value = pixelRatio;
-      particleMat.uniforms.uOpacity.value = 0.2 + 0.35 * turbidity;
     };
     return {
       glassMat,
       trimMat,
       meniscusMat,
       meniscus,
-      waterMat,
       surfaceMat,
-      particleMat,
       sand,
       seams,
-      particles: buildParticles(400),
       update,
     };
   }, []);
@@ -285,26 +249,22 @@ export function Aquarium() {
   useHighlight("aquarium", [glassMat, trimMat]);
 
   useFrame((state) => {
-    const { turbidity, lighting } = useSimStore.getState().engine.scenario;
-    update(state.clock.elapsedTime, turbidity, lighting, state.gl.getPixelRatio());
+    update(state.clock.elapsedTime, useSimStore.getState().engine.scenario.lighting, env);
   });
 
   return (
-    <group>
+    <group name="aquarium">
       {/* sand: rippled surface plus a shallow layer visible through the glass */}
       <mesh geometry={sand.geo} material={sand.mat} receiveShadow />
       <mesh position={[0, -SD / 2 - 0.003, 0]} material={sand.mat}>
         <boxGeometry args={[INNER_L, SD - 0.006, INNER_W]} />
       </mesh>
 
-      {/* water volume, BackSide so a camera inside it sees the tint on the walls */}
-      <mesh position={[0, (WL - 0.006) / 2, 0]} material={waterMat} renderOrder={1}>
-        <boxGeometry args={[INNER_L, WL + 0.006, INNER_W]} />
-      </mesh>
+      {/* the water body itself is not a mesh: components/lab/water.ts attenuates every view ray inside it */}
       <mesh position={[0, WL, 0]} rotation={[-Math.PI / 2, 0, 0]} material={surfaceMat} renderOrder={2}>
         <planeGeometry args={[INNER_L, INNER_W, 48, 24]} />
       </mesh>
-      <points geometry={particles} material={particleMat} renderOrder={2} />
+      <Particles min={PARTICLES_MIN} max={PARTICLES_MAX} count={2400} drift={DRIFT[env]} />
 
       {/* glass: four walls and the bottom pane */}
       <group renderOrder={3}>

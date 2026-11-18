@@ -130,6 +130,7 @@ export function Btn({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-pressed={active}
       className={clsx("btn inline-flex items-center gap-1.5", primary && "btn-primary", active && "btn-active", className)}
     >
       {children}

@@ -1,3 +1,4 @@
+import { ENVIRONMENTS, isEnvironmentId } from "./environments";
 import { CAMERA, DETECTION, GANTRY, RL, TEST, clamp } from "./constants";
 import { runDetection } from "./detection";
 import { createGantry, gantryAtTarget, setGantryTarget, stepGantry } from "./gantry";
@@ -68,6 +69,9 @@ export class SimEngine {
   private episodeCounter = 0;
   private rand = mulberry32(TEST.seed);
   private accumulator = 0;
+  /** gantry position at the start of the current substep, for render interpolation */
+  private prevPose = { x: 0, y: 0 };
+  private readonly pose = { x: 0, y: 0 };
   private detectAccumulator = 0;
   private detectionMap = new Map<string, Detection>();
   private trackTargetId: string | null = null;
@@ -113,10 +117,14 @@ export class SimEngine {
   /** Non-finite fields are ignored, not collapsed to a bound: a bad input never darkens the tank. */
   setScenario(patch: Partial<Omit<Scenario, "objects">>): void {
     const s = this.scenario;
+    // A new environment brings its own typical water and light unless the patch sets them too.
+    const environment = isEnvironmentId(patch.environment) ? patch.environment : s.environment;
+    const base = environment !== s.environment ? { ...s, ...ENVIRONMENTS[environment].defaults } : s;
     this.scenario = {
       ...s,
-      turbidity: clamp(finite(patch.turbidity, s.turbidity), 0, 1),
-      lighting: clamp(finite(patch.lighting, s.lighting), 0, 1),
+      environment,
+      turbidity: clamp(finite(patch.turbidity, base.turbidity), 0, 1),
+      lighting: clamp(finite(patch.lighting, base.lighting), 0, 1),
       threshold: clamp(finite(patch.threshold, s.threshold), 0.3, 0.95),
       gantrySpeed: clamp(finite(patch.gantrySpeed, s.gantrySpeed), 0.2, 1),
       seed: finite(patch.seed, s.seed) >>> 0,
@@ -206,6 +214,22 @@ export class SimEngine {
 
   // ---------- main loop ----------
 
+  /**
+   * Gantry position to draw this frame: the last two substeps blended by the time already accumulated toward the
+   * next one. The simulation runs at a fixed 120 Hz while displays run at 60, 90, 120 or 144 Hz with jittering
+   * frame times; drawing the raw substep position makes the carriage judder whenever a frame spans 0, 1 or 3
+   * substeps instead of 2. A jump larger than any real substep (a reset) is drawn as it is, never smeared.
+   * Read-only for the renderer; the returned object is reused.
+   */
+  renderPose(): { x: number; y: number } {
+    const { x, y } = this.gantry;
+    const a = Math.min(1, Math.max(0, this.accumulator / FIXED_DT));
+    const jump = Math.abs(x.pos - this.prevPose.x) + Math.abs(y.pos - this.prevPose.y) > 1;
+    this.pose.x = jump ? x.pos : this.prevPose.x + (x.pos - this.prevPose.x) * a;
+    this.pose.y = jump ? y.pos : this.prevPose.y + (y.pos - this.prevPose.y) * a;
+    return this.pose;
+  }
+
   tick(dt: number): void {
     if (!(dt > 0)) return; // NaN or negative would freeze the accumulator for good
     this.accumulator += Math.min(dt, 0.25);
@@ -216,6 +240,8 @@ export class SimEngine {
   }
 
   private substep(dt: number): void {
+    this.prevPose.x = this.gantry.x.pos;
+    this.prevPose.y = this.gantry.y.pos;
     this.time += dt;
     this.frame = Math.floor(this.time * CAMERA.fps);
     stepGantry(this.gantry, dt, this.scenario.gantrySpeed);
@@ -450,6 +476,7 @@ export class SimEngine {
       episodeReward: this.rl.episodeReward,
       durationS: this.time, // the clock restarts when the scan begins
       targetId,
+      environment: this.scenario.environment,
       turbidity: this.scenario.turbidity,
       lighting: this.scenario.lighting,
       threshold: this.scenario.threshold,

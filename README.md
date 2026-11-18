@@ -51,16 +51,41 @@ Continuing development in a new session: read `docs/HANDOFF.md` first, then `doc
 | 06 Scenario | three-quarter | Turbidity, lighting, detection threshold, gantry speed, object positions; `RUN TEST` |
 | 07 Result | three-quarter | Objects detected, correct classifications, false positives, confidence, coverage, reward, duration; `REPLAY TEST`; the closing "simulation to field" moment |
 
+## Exploring the model
+
+- Drag to orbit, right-drag to pan, scroll or pinch to zoom; the camera can go all the way around, including underneath.
+- The first orbit, pan or zoom enters explore mode: the panels step aside and the machine glides to the middle of the window, re-framed for the live view direction until it settles.
+- Double-click any part to make it the orbit centre; glass and water are looked through, so a click on an object in the tank lands on the object.
+- `EXPLORE` (or `E`) hides every panel so the whole window is the machine; `Esc` or `DONE` brings them back.
+- `RECENTER` (or `C`) returns to the current scene's framed view.
+- Scene 04's XY pad moves the carriage on click, steers it live while dragged, and jogs it 5 cm with the arrow keys (1 cm with Shift).
+- `1` to `7` and the arrow keys switch scenes.
+
 ## How the simulation works
 
 The engine is pure TypeScript in `lib/sim/`, deterministic and fixed-timestep, with no React dependency.
 `docs/BLUEPRINT.md` is the specification: physical dimensions, the coordinate mapping, the detection and control formulas, and the scene plan.
 
-- **Gantry** (`gantry.ts`): each axis follows a trapezoidal velocity profile toward its target, 15 cm/s max, 30 cm/s^2, clamped to 100 x 40 cm of travel. The carriage never teleports and never leaves the rails.
-- **Detection** (`detection.ts`): the camera is a pinhole 42 cm above the sand with a 75 degree horizontal field of view. Objects are projected into the frame; confidence is `detectability * geometry * water * light`, where geometry falls off with distance from the optical axis and burial in sand, water is `exp(-1.1 * turbidity^2 * distance / 0.42)`, and light is `lighting^0.3`, so no light sees nothing and heavy silt sees nothing at the default threshold. Bounding boxes are real projections of the object bounds. Objects below the threshold are missed; low-confidence detections degrade to `UNKNOWN`, and one debris object is deliberately confusable with the training target, which gives a deterministic false positive.
+- **Gantry** (`gantry.ts`): each axis follows a trapezoidal velocity profile toward its target, 15 cm/s max, 30 cm/s^2, clamped to 100 x 40 cm of travel. The axes are coordinated so every move is a straight line, and the 3D view interpolates between simulation steps so motion is smooth at any display rate. The carriage never teleports and never leaves the rails.
+- **Detection** (`detection.ts`): the camera is a pinhole 42 cm above the sand with a 75 degree horizontal field of view. Objects are projected into the frame; confidence is `detectability * geometry * water * light`, where geometry falls off with distance from the optical axis and burial in sand, water is the fraction of the object's contrast against the sand that survives the water path, from the same optics the renderer draws (zero at the 2 percent contrast threshold), and light is `lighting^0.3` (in the lamp-lit deep sea, the square root of the lamp's irradiance on the object, falling off with the square of distance), so no light sees nothing and heavy silt sees nothing at the default threshold. Bounding boxes are real projections of the object bounds. Objects below the threshold are missed; low-confidence detections degrade to `UNKNOWN`, and one debris object is deliberately confusable with the training target, which gives a deterministic false positive.
 - **Control** (`policy.ts`): a greedy controller over five actions (`MOVE_X+`, `MOVE_X-`, `MOVE_Y+`, `MOVE_Y-`, `HOLD`) with epsilon exploration that decays with episode number, seeded so replays are identical. Reward is distance closed per step, plus a confidence bonus, minus a step cost, plus a bonus for holding on target. The reward is logged, not learned from; the interface says so. A trained policy would consume the same observation.
 - **Test runner** (`engine.ts`): drive home, scan six waypoints, record detections, pick the best correct detection as the target, run one control episode, report. `REPLAY TEST` re-runs with the same seed and produces the same numbers.
-- **Feed** (`components/lab/FeedRenderer.tsx`): the camera feed panel is the same Three.js scene rendered a second time from the carriage camera with underwater fog, so what you see in the feed is what the gantry camera would see.
+- **Feed** (`components/lab/FeedRenderer.tsx`): the camera feed panel is the same Three.js scene rendered a second time from the carriage camera, so what you see in the feed is what the gantry camera would see.
+- **Water** (`lib/optics/water.ts`, `components/lab/water.ts`): turbidity is shown in NTU with the range at which contrast falls to 2 percent. Per-channel absorption and scattering come from published pure-water data plus a clay suspension; every submerged surface is attenuated along its true path through the water and veiled by the scattered light, in both views.
+
+## Environments
+
+The same rig, objects and test run in four waters, chosen with `setScenario({ environment })` (`lib/sim/environments.ts`).
+
+- **Lab tank**: the controlled baseline and calibration anchor, 0.45 NTU by default.
+- **Harbor**: pier and hull inspection in grey-green coastal water over mud, 6 m deep, 2.6 NTU by default.
+- **River**: bridge pier inspection in grey-brown, silt-laden water in a 1.2 m reach, 3.5 NTU by default, up to 150 NTU in a spate.
+- **Deep sea**: no daylight at 1500 m; only the rig's lamps light the scene, so lamp power is the limit.
+
+Each environment sets its own water (particles, dissolved organic matter, turbidity range), light source and seabed, and switching applies its default turbidity and lighting.
+Detection reads the same water and light paths the renderer draws, and every result records the environment.
+Every environment is recreated inside the gantry's own tank, as a test tank emulates field conditions: the water, the floor substrate, small scale props in the margins, the light at depth and, for the river, a slow flume current. The rig and the test objects never change, so results are comparable across environments.
+`docs/BLUEPRINT.md` section 4.5 has the parameters and calibration.
 
 ## Project structure
 

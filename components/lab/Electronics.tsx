@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { GANTRY } from "@/lib/sim/constants";
 import { mergeBoxes, std, useHighlight } from "./util";
@@ -12,8 +12,13 @@ export const PI_POS: [number, number, number] = [0.86, SHELF.y + 0.002, 0.06];
 export const PSU_POS: [number, number, number] = [0.8, SHELF.y + 0.002, -0.12];
 /** Ground-truth camera: centred over the tank on an arm from a mast at the -X end, pointing straight down. */
 export const OVERHEAD_CAM_POS: [number, number, number] = [0, 1.29, 0];
-const OVERHEAD_MAST_X = -0.63;
-const OVERHEAD_ARM_Y = 1.31;
+export const OVERHEAD_MAST_X = -0.63;
+export const OVERHEAD_ARM_Y = 1.31;
+/**
+ * Layer of the overhead ground-truth rig. The top-down preset disables it on the main camera: from above, the arm
+ * sits between the lens and the tank and its shadow lands on the frame, hiding what the view exists to show.
+ */
+export const OVERHEAD_LAYER = 3;
 
 function tube(points: THREE.Vector3[], r: number) {
   return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 24, r, 6, false);
@@ -58,7 +63,12 @@ export function Electronics() {
       { size: [len, 0.02, 0.02], at: [cx, GANTRY.railHeight + 0.01, SHELF.halfZ] },
       { size: [len, 0.02, 0.02], at: [cx, GANTRY.railHeight + 0.01, -SHELF.halfZ] },
       { size: [0.02, 0.02, SHELF.halfZ * 2], at: [SHELF.x1 - 0.01, GANTRY.railHeight + 0.01, 0] },
-      // overhead camera: 2020 mast on the -X short member, arm to the tank centre, diagonal brace
+    ]);
+  }, []);
+
+  // overhead camera: 2020 mast on the -X short member, arm to the tank centre, diagonal brace
+  const overheadGeo = useMemo(() => {
+    return mergeBoxes([
       { size: [0.02, OVERHEAD_ARM_Y + 0.01 - (GANTRY.railHeight + 0.02), 0.02], at: [OVERHEAD_MAST_X, (OVERHEAD_ARM_Y + 0.01 + GANTRY.railHeight + 0.02) / 2, 0] },
       { size: [-OVERHEAD_MAST_X + 0.03, 0.02, 0.02], at: [(OVERHEAD_MAST_X + 0.03) / 2, OVERHEAD_ARM_Y, 0] },
       { size: [0.44, 0.015, 0.015], at: [OVERHEAD_MAST_X + 0.155, OVERHEAD_ARM_Y - 0.155, 0], rot: [0, 0, Math.PI / 4] },
@@ -122,6 +132,11 @@ export function Electronics() {
       0.002,
     );
     return { usb, power, ribbon, stepper, overheadUsb };
+  }, []);
+
+  const overhead = useRef<THREE.Group>(null);
+  useEffect(() => {
+    overhead.current?.traverse((o) => o.layers.set(OVERHEAD_LAYER));
   }, []);
 
   return (
@@ -207,16 +222,19 @@ export function Electronics() {
       <mesh geometry={cables.power} material={mats.cable} />
       <mesh geometry={cables.stepper} material={mats.cable} />
       <mesh geometry={cables.ribbon} material={mats.ribbon} />
-      <mesh geometry={cables.overheadUsb} material={mats.cable} />
 
-      {/* overhead ground-truth camera under the arm, pointing straight down at the tank centre */}
-      <group position={OVERHEAD_CAM_POS} rotation={[-Math.PI / 2, 0, 0]}>
-        <mesh material={mats.black} castShadow>
-          <boxGeometry args={[0.03, 0.03, 0.04]} />
-        </mesh>
-        <mesh material={mats.silver} position={[0, 0, -0.024]} rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.008, 0.01, 0.01, 16]} />
-        </mesh>
+      <group ref={overhead}>
+        <mesh geometry={overheadGeo} material={mats.alu} castShadow />
+        <mesh geometry={cables.overheadUsb} material={mats.cable} />
+        {/* overhead ground-truth camera under the arm, pointing straight down at the tank centre */}
+        <group position={OVERHEAD_CAM_POS} rotation={[-Math.PI / 2, 0, 0]}>
+          <mesh material={mats.black} castShadow>
+            <boxGeometry args={[0.03, 0.03, 0.04]} />
+          </mesh>
+          <mesh material={mats.silver} position={[0, 0, -0.024]} rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[0.008, 0.01, 0.01, 16]} />
+          </mesh>
+        </group>
       </group>
     </group>
   );

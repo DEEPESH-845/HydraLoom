@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { CAMERA, GANTRY, TANK, gantryToWorld } from "@/lib/sim/constants";
 import type { SimEngine } from "@/lib/sim/engine";
+import { ENVIRONMENTS } from "@/lib/sim/environments";
 import { useSimStore, type ComponentId } from "@/lib/sim/store";
 import { ARDUINO_POS, PI_POS } from "./Electronics";
 import { AMBER, TEAL, freeRect } from "./util";
@@ -87,7 +88,8 @@ export function Overlays() {
   useFrame((state) => {
     const s = useSimStore.getState();
     const g = s.engine.gantry;
-    const [wx, wz] = gantryToWorld(g.x.pos, g.y.pos);
+    const pose = s.engine.renderPose();
+    const [wx, wz] = gantryToWorld(pose.x, pose.y);
     if (carriage.current) carriage.current.position.set(wx, 0, wz);
 
     // Scene 02 "camera" highlight: the frustum is the visible part of the camera, so tint it too.
@@ -233,7 +235,8 @@ const CALLOUTS: Array<{ id: ComponentId; n: string; text: string; at: [number, n
     n: "02",
     text: "CAMERA",
     at: (e, out) => {
-      const [x, z] = gantryToWorld(e.gantry.x.pos, e.gantry.y.pos);
+      const pose = e.renderPose();
+      const [x, z] = gantryToWorld(pose.x, pose.y);
       return out.set(x, CAMERA.lensHeight + 0.05, z);
     },
     prefer: "l",
@@ -294,6 +297,7 @@ function Callout({ id, n, text, register }: { id: ComponentId; n: string; text: 
 
 export function Callouts() {
   const scene = useSimStore((s) => s.scene);
+  const environment = useSimStore((s) => s.scenario.environment);
   const nodes = useRef(new Map<ComponentId, HTMLDivElement>());
   const groups = useRef(new Map<ComponentId, THREE.Group>());
   const register = useCallback((id: ComponentId, el: HTMLDivElement | null) => {
@@ -405,7 +409,7 @@ export function Callouts() {
           }}
           position={typeof c.at === "function" ? undefined : c.at}
         >
-          <Callout id={c.id} n={c.n} text={c.text} register={register} />
+          <Callout id={c.id} n={c.n} text={c.id === "aquarium" && environment !== "tank" ? `AQUARIUM · ${ENVIRONMENTS[environment].name.toUpperCase()}` : c.text} register={register} />
         </group>
       ))}
     </group>

@@ -1,4 +1,6 @@
-import { CAMERA, DETECTION, clamp, gantryToWorld, worldToGantry } from "./constants";
+import { CAMERA, DETECTION, GANTRY, clamp, gantryToWorld, worldToGantry } from "./constants";
+import { contrastRatio, waterDetectability, waterOptics } from "../optics/water";
+import { ENVIRONMENTS, environmentWater, lightPaths } from "./environments";
 import { hash01 } from "./rng";
 import type { Detection, DetectionState, Scenario, TestObject } from "./types";
 
@@ -57,6 +59,9 @@ function projectBounds(camX: number, camZ: number, o: TestObject) {
 /** Once detected, an object stays detected until it drops this far below the threshold. */
 export const HYSTERESIS = 0.05;
 
+/** Once classified as its true type, an object keeps that class until it drops this far below the classify threshold. Must exceed twice the jitter. */
+export const CLASS_HYSTERESIS = 0.03;
+
 export interface DetectionInput {
   gantryX: number;
   gantryY: number;
@@ -74,12 +79,27 @@ export interface DetectionOutput {
   inFrame: number;
 }
 
+/**
+ * Light term where the rig's lamps are the only light (the deep sea). With no ambient light the signal is the lamp's
+ * irradiance on the object: power, inverse square of distance (relative to the lens height, where the lamps are
+ * sized), and diffuse attenuation over the path. The sensor is shot-noise limited, so quality goes with the square
+ * root of the signal. Contrast does not depend on lamp power (object and veil share the lamp); this term does.
+ */
+export function lampLight(lighting: number, kd: number, distanceM: number): number {
+  const d = Math.max(0.05, distanceM);
+  const signal = clamp(lighting, 0, 1) * Math.exp(-kd * d) * (CAMERA.lensHeight / d) ** 2;
+  return Math.sqrt(clamp(signal, 0, 1));
+}
+
 export function runDetection(input: DetectionInput): DetectionOutput {
   const { scenario, time, previous, dt } = input;
   const [camX, camZ] = gantryToWorld(input.gantryX, input.gantryY);
   const out: Detection[] = [];
   let inFrame = 0;
   const tick = Math.floor(time * DETECTION.hz);
+  // the same water the renderer draws: components/lab/water.ts
+  const env = ENVIRONMENTS[scenario.environment] ?? ENVIRONMENTS.tank;
+  const optics = waterOptics(environmentWater(env, scenario.turbidity));
 
   for (let i = 0; i < scenario.objects.length; i++) {
     const o = scenario.objects[i];
@@ -104,8 +124,10 @@ export function runDetection(input: DetectionInput): DetectionOutput {
     const lateral = Math.hypot(ox - camX, oz - camZ);
     const distance = Math.hypot(lateral, CAMERA.lensHeight - o.z);
     const geometry = 1 - DETECTION.centeringWeight * rSq - DETECTION.burialWeight * o.burial;
-    const water = Math.exp((-DETECTION.turbidityK * scenario.turbidity * scenario.turbidity * distance) / CAMERA.lensHeight);
-    const light = Math.pow(clamp(scenario.lighting, 0, 1), DETECTION.lightingGamma);
+    const water = waterDetectability(
+      contrastRatio(optics, { pathM: distance, ...lightPaths(env, o.z, distance), backgroundReflectance: env.seabedReflectance }),
+    );
+    const light = env.light === "lamp" ? lampLight(scenario.lighting, optics.kd[1], distance) : Math.pow(clamp(scenario.lighting, 0, 1), DETECTION.lightingGamma);
     const jitter = (hash01(i + 1, tick, scenario.seed) - 0.5) * 2 * DETECTION.jitter;
     const confidence = clamp(o.detectability * geometry * water * light + jitter, 0, 0.995);
 
@@ -113,13 +135,19 @@ export function runDetection(input: DetectionInput): DetectionOutput {
     const gate = prev ? scenario.threshold - HYSTERESIS : scenario.threshold;
     if (confidence < gate) continue;
 
+    // A class already confirmed holds until confidence drops clearly below the classify
+    // threshold, so seeded jitter around 0.65 cannot flip the label at 10 Hz.
+    const classGate = prev?.class === o.type ? DETECTION.classifyThreshold - CLASS_HYSTERESIS : DETECTION.classifyThreshold;
     let cls: Detection["class"] = o.type;
-    if (confidence < DETECTION.classifyThreshold) cls = o.confusableAs ?? "UNKNOWN";
+    if (confidence < classGate) cls = o.confusableAs ?? "UNKNOWN";
 
     // Estimated position: back-project the feed centre of the box onto the sand plane.
     const estWX = camX + (cu * 2 - 1) * CAMERA.lensHeight * tanH;
     const estWZ = camZ + (cv * 2 - 1) * CAMERA.lensHeight * tanV;
-    const [estX, estY] = worldToGantry(estWX, estWZ);
+    // The sand runs past the rails; the estimate is a gantry target, so it is clamped to travel.
+    const [rawX, rawY] = worldToGantry(estWX, estWZ);
+    const estX = clamp(rawX, 0, GANTRY.travelX);
+    const estY = clamp(rawY, 0, GANTRY.travelY);
 
     const age = prev ? prev.age + dt : 0;
     const state: DetectionState = age >= DETECTION.lockSeconds ? "LOCKED" : "DETECTED";

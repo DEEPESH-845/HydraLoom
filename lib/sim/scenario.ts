@@ -81,6 +81,7 @@ export const DEFAULT_OBJECTS: TestObject[] = [
 export function defaultScenario(): Scenario {
   return {
     objects: DEFAULT_OBJECTS.map((o) => ({ ...o })),
+    environment: "tank",
     turbidity: 0.15,
     lighting: 0.8,
     threshold: 0.6,
