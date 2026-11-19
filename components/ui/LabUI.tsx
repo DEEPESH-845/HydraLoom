@@ -2,9 +2,10 @@
 
 import clsx from "clsx";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { Play, RotateCcw } from "lucide-react";
+import { Focus, Play, Rotate3d, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { ENVIRONMENTS } from "@/lib/sim/environments";
 import { useSimStore, type SceneId } from "@/lib/sim/store";
 import { CameraFeed } from "./CameraFeed";
 import { DemoCard, VisionMoment } from "./overlays";
@@ -51,6 +52,7 @@ export function LabUI() {
   const scene = useSimStore((s) => s.scene);
   const demoActive = useSimStore((s) => s.demo.active);
   const showVision = useSimStore((s) => s.showVision);
+  const exploring = useSimStore((s) => s.exploring);
   const setScene = useSimStore((s) => s.setScene);
   const visionColumnWidth = useVisionColumnWidth();
 
@@ -60,7 +62,10 @@ export function LabUI() {
       const s = useSimStore.getState();
       if (s.demo.active || s.showVision) return;
       const cur = s.scene;
-      if (e.key === "ArrowDown" || e.key === "ArrowRight") s.setScene(Math.min(7, cur + 1) as SceneId);
+      if (e.key === "e" || e.key === "E") s.setExploring(!s.exploring);
+      else if (e.key === "Escape" && s.exploring) s.setExploring(false);
+      else if (e.key === "c" || e.key === "C") s.recenterView();
+      else if (e.key === "ArrowDown" || e.key === "ArrowRight") s.setScene(Math.min(7, cur + 1) as SceneId);
       else if (e.key === "ArrowUp" || e.key === "ArrowLeft") s.setScene(Math.max(1, cur - 1) as SceneId);
       else if (e.key >= "1" && e.key <= "7") s.setScene(Number(e.key) as SceneId);
       else return;
@@ -75,12 +80,15 @@ export function LabUI() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="pointer-events-none absolute inset-0 select-none overflow-hidden max-[999px]:flex max-[999px]:flex-col">
+        <SiteVeil />
         <TopBar />
+
+        <SiteTag />
 
         {/* left rail: scene index. Below 1000 px it is a horizontal strip directly above the card. */}
         <nav
           data-lab="nav"
-          className="pointer-events-auto absolute left-4 top-1/2 flex -translate-y-1/2 flex-col gap-0.5 max-[999px]:static max-[999px]:mx-auto max-[999px]:mt-auto max-[999px]:w-[calc(100%-2rem)] max-[999px]:max-w-[620px] max-[999px]:translate-y-0 max-[999px]:flex-row max-[999px]:gap-0 max-[999px]:border max-[999px]:border-b-0 max-[999px]:border-line max-[999px]:bg-panel/92 max-[999px]:px-1"
+          className={clsx(exploring && "invisible", "pointer-events-auto absolute left-4 top-1/2 flex -translate-y-1/2 flex-col gap-0.5 border border-line/60 bg-ground/80 py-1.5 max-[999px]:static max-[999px]:py-0 max-[999px]:mx-auto max-[999px]:w-[calc(100%-2rem)] max-[999px]:max-w-[620px] max-[999px]:translate-y-0 max-[999px]:flex-row max-[999px]:gap-0 max-[999px]:border max-[999px]:border-b-0 max-[999px]:border-line max-[999px]:bg-panel/92 max-[999px]:px-1")}
           aria-label="Scenes"
         >
           {SCENES.map((s) => {
@@ -107,7 +115,7 @@ export function LabUI() {
         {/* right column: feed + telemetry. Wider in VISION so the feed is the focus. */}
         <motion.div
           data-lab="column"
-          className="pointer-events-auto absolute right-4 top-14 flex max-h-[calc(100%-4.5rem)] flex-col gap-2 max-[999px]:w-[220px]! max-[759px]:w-[176px]!"
+          className={clsx(exploring && "invisible", "pointer-events-auto absolute right-4 top-14 flex max-h-[calc(100%-4.5rem)] flex-col gap-2 max-[999px]:w-[220px]! max-[759px]:w-[176px]!")}
           initial={false}
           animate={{ width: scene === 3 ? visionColumnWidth : 300 }}
           transition={{ duration: 0.25, ease: "easeOut" }}
@@ -121,7 +129,7 @@ export function LabUI() {
         </motion.div>
 
         {/* bottom centre: context card or demo controller. Between 1000 and 1259 px it sits between the rail and the column; below 1000 px it is the last block of the stack. */}
-        <div data-lab="card" className="pointer-events-none absolute bottom-6 left-1/2 w-[calc(100%-2rem)] max-w-[620px] -translate-x-1/2 max-[1259px]:left-32 max-[1259px]:right-[332px] max-[1259px]:w-auto max-[1259px]:max-w-none max-[1259px]:translate-x-0 max-[999px]:static max-[999px]:mx-auto max-[999px]:mb-4 max-[999px]:w-[calc(100%-2rem)] max-[999px]:max-w-[620px] max-[999px]:translate-x-0">
+        <div data-lab="card" className={clsx(exploring && "invisible", "pointer-events-none absolute bottom-6 left-1/2 w-[calc(100%-2rem)] max-w-[620px] -translate-x-1/2 max-[1259px]:left-32 max-[1259px]:right-[332px] max-[1259px]:w-auto max-[1259px]:max-w-none max-[1259px]:translate-x-0 max-[999px]:static max-[999px]:mx-auto max-[999px]:mb-4 max-[999px]:w-[calc(100%-2rem)] max-[999px]:max-w-[620px] max-[999px]:translate-x-0")}>
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={demoActive ? "demo" : scene}
@@ -136,9 +144,86 @@ export function LabUI() {
           </AnimatePresence>
         </div>
 
+        <AnimatePresence>{exploring && <ExploreHint key="explore" />}</AnimatePresence>
+
         <AnimatePresence>{showVision && <VisionMoment key="vision" />}</AnimatePresence>
       </div>
     </MotionConfig>
+  );
+}
+
+/**
+ * Which environment the tank is set up as, and an honest note when the main 3D view is lit differently from the feed.
+ * Top left under the header from 1000 px; below that it sits in the stack directly above the scene strip.
+ * Stays visible in explore mode, where the 3D view is all there is to look at.
+ */
+function SiteTag() {
+  const environment = useSimStore((s) => s.scenario.environment);
+  const env = ENVIRONMENTS[environment];
+  // the lamp-lit deep gets an overview fill light in the main view only (components/lab/TankDressing.tsx overviewFill)
+  const filled = env.light === "lamp";
+
+  return (
+    <div
+      data-lab="site-tag"
+      className="pointer-events-none absolute left-4 top-14 flex max-w-[calc(100%-360px)] flex-wrap items-start gap-1 max-[999px]:static max-[999px]:mx-auto max-[999px]:mt-auto max-[999px]:mb-1.5 max-[999px]:w-[calc(100%-2rem)] max-[999px]:max-w-[620px]"
+      role="status"
+    >
+      <span className="sim-tag flex items-center gap-1.5 bg-ground/85 text-text">
+        <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden />
+        {environment === "tank" ? env.name.toUpperCase() : `TANK · ${env.name.toUpperCase()} WATER`}
+      </span>
+      {filled && (
+        <span className="sim-tag bg-ground/85" title="Lab lights are off for the deep sea. The main 3D view adds a dim fill so the rig stays visible; the camera feed and detection see only the rig's lamps.">
+          OVERVIEW LIT FOR VISIBILITY · camera feed sees only the rig lamps
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Covers the 3D view (and the camera feed under its transparent frame) while the site is swapped for another
+ * environment, so the swap and the shader compile behind it are never seen. Panels stay above it and usable.
+ */
+function SiteVeil() {
+  const ready = useSimStore((s) => s.siteReady);
+  return (
+    <div
+      aria-hidden
+      data-site-ready={ready ? "true" : "false"}
+      className={clsx(
+        "absolute inset-0 bg-ground transition-opacity ease-out motion-reduce:transition-none",
+        ready ? "opacity-0 duration-300" : "opacity-100 duration-200",
+      )}
+    />
+  );
+}
+
+/** Shown while the panels are hidden: how to drive the free camera, and the way back. */
+function ExploreHint() {
+  const setExploring = useSimStore((s) => s.setExploring);
+  const recenterView = useSimStore((s) => s.recenterView);
+  return (
+    <motion.div
+      className="panel pointer-events-auto absolute bottom-6 left-1/2 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      role="status"
+    >
+      <span className="label text-teal">Explore</span>
+      <span className="text-[12px] text-muted">Drag to orbit, right-drag to pan, scroll or pinch to zoom, double-click a part to orbit around it.</span>
+      <span className="flex gap-1.5">
+        <Btn onClick={recenterView} title="Recenter view (C)">
+          <Focus size={14} /> Recenter
+        </Btn>
+        <Btn onClick={() => setExploring(false)} title="Show panels (E or Esc)">
+          Done
+        </Btn>
+      </span>
+    </motion.div>
   );
 }
 
@@ -157,15 +242,18 @@ function TopBar() {
   const demoActive = useSimStore((s) => s.demo.active);
   const startDemo = useSimStore((s) => s.startDemo);
   const reset = useSimStore((s) => s.reset);
+  const exploring = useSimStore((s) => s.exploring);
+  const setExploring = useSimStore((s) => s.setExploring);
+  const recenterView = useSimStore((s) => s.recenterView);
 
   return (
-    <header data-lab="header" className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-between gap-4 border-b border-line/70 bg-ground/55 px-4 max-[999px]:static max-[999px]:shrink-0">
+    <header data-lab="header" className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-between gap-4 border-b border-line/70 bg-ground/85 px-4 max-[999px]:static max-[479px]:gap-2 max-[479px]:px-3 max-[999px]:shrink-0">
       <div className="pointer-events-auto flex min-w-0 items-baseline gap-3 overflow-hidden">
-        <span className="whitespace-nowrap font-mono text-[13px] font-semibold tracking-[0.28em] text-text">GANTRYLAB</span>
+        <span className="whitespace-nowrap font-mono text-[13px] font-semibold tracking-[0.28em] text-text max-[479px]:text-[12px] max-[479px]:tracking-[0.18em]">GANTRYLAB</span>
         <span className="label whitespace-nowrap max-[1399px]:hidden">Underwater robotics testbed</span>
-        <span className="hidden truncate whitespace-nowrap text-[12px] text-muted min-[1100px]:block">Test underwater autonomy in a tank before open water.</span>
+        <span className="hidden truncate whitespace-nowrap text-[12px] text-muted min-[1680px]:block">Test underwater autonomy in a tank before open water.</span>
       </div>
-      <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+      <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 max-[399px]:gap-1">
         {/* secondary status, dropped below 1000 px so the brand always has room */}
         <div className="contents max-[999px]:hidden">
           <StatusChip name="Arduino" value={sys.arduino} />
@@ -173,11 +261,17 @@ function TopBar() {
           <StatusChip name="Camera" value={sys.camera} />
           <span className="mx-1 h-5 w-px bg-line" />
         </div>
-        <Btn primary onClick={startDemo} disabled={demoActive}>
-          <Play size={14} /> {demoActive ? "Demo running" : "Run demo"}
+        <Btn onClick={() => setExploring(!exploring)} active={exploring} disabled={demoActive} title="Explore: hide the panels and orbit freely (E)">
+          <Rotate3d size={14} /> <span className="max-[1279px]:hidden">Explore</span>
         </Btn>
-        <Btn onClick={reset} disabled={demoActive}>
-          <RotateCcw size={14} /> Reset
+        <Btn onClick={recenterView} title="Recenter view (C)">
+          <Focus size={14} /> <span className="max-[1279px]:hidden">Recenter</span>
+        </Btn>
+        <Btn primary onClick={startDemo} disabled={demoActive}>
+          <Play size={14} className="max-[399px]:hidden" /> {demoActive ? <>Demo<span className="max-[999px]:hidden"> running</span></> : "Run demo"}
+        </Btn>
+        <Btn onClick={reset} disabled={demoActive} title="Reset">
+          <RotateCcw size={14} /> <span className="max-[479px]:hidden">Reset</span>
         </Btn>
       </div>
     </header>

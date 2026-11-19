@@ -5,10 +5,21 @@ test.describe("detection", () => {
     await lab.open();
     await lab.scene(3);
     await lab.waitFor((s) => s.detections.length >= 2);
+    // VISION widens the right column (300 to 440 px); measure the feed only once that animation and the camera are done
+    await lab.settleCamera();
     const dets = await lab.state((s) => s.detections);
     const feed = page.locator("#gantry-camera-feed");
-    const fb = (await feed.boundingBox())!;
+    // the column slides while it widens; wait until the feed box holds still before comparing positions to it
+    await expect
+      .poll(async () => {
+        const a = await feed.boundingBox();
+        await page.waitForTimeout(150);
+        const b = await feed.boundingBox();
+        return !!a && !!b && Math.abs(a.x - b.x) < 0.5 && Math.abs(a.width - b.width) < 0.5;
+      })
+      .toBe(true);
     for (const d of dets) {
+      const fb = (await feed.boundingBox())!;
       expect(d.confidence).toBeGreaterThanOrEqual(0.6 - 0.05);
       expect(d.bbox.every((v) => v >= 0 && v <= 1)).toBe(true);
       // the DOM box for this detection sits where the normalised bbox says

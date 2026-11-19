@@ -1,19 +1,21 @@
 /**
  * Headless check of the simulation engine. Run with `npm run sim:check`.
  * Fails loudly if determinism, gantry constraints, the detection state machine,
- * the controller, the test runner, the store or the demo director break.
+ * the controller, the test runner, the store, the demo director, the water optics or the test environments break.
  * Every bug found in the sim becomes an assertion here.
  */
 import assert from "node:assert/strict";
 import { GANTRY, RL, clamp } from "./constants";
 import { DEMO_PHASES, createDemoDirector, stepDemo } from "./demo";
-import { runDetection } from "./detection";
+import { lampLight, runDetection } from "./detection";
 import { SimEngine } from "./engine";
 import { PARK } from "./gantry";
+import { ENVIRONMENTS, ENVIRONMENT_IDS, environmentNtu, environmentWater } from "./environments";
 import { epsilonFor, reward } from "./policy";
 import { defaultScenario } from "./scenario";
 import { useSimStore } from "./store";
 import type { Detection, RLObservation } from "./types";
+import { CONTRAST_THRESHOLD, PURE_WATER_ABSORPTION, TANK_MAX_NTU, contrastRatio, tankNtu, tankWater, visibilityRange, waterDetectability, waterOptics } from "../optics/water";
 
 const SUB = 1 / 120;
 const onRail = (e: SimEngine) => e.gantry.x.pos >= 0 && e.gantry.x.pos <= GANTRY.travelX && e.gantry.y.pos >= 0 && e.gantry.y.pos <= GANTRY.travelY;
@@ -69,12 +71,12 @@ assert.deepEqual(a.result, b.result, "replay is not deterministic");
 assert.deepEqual(a.events, b.events, "replay event logs differ");
 // Calibration in docs/BLUEPRINT.md 4.2 and docs/HANDOFF.md 4. Change these only with the docs.
 assert.equal(a.result.objectsDetected, 5);
-assert.equal(a.result.successfulDetections, 3);
+assert.equal(a.result.successfulDetections, 4);
 assert.equal(a.result.falsePositives, 1);
 assert.equal(a.result.coverage, 0.9);
-assert.equal(a.result.episodeReward, 15.64);
+assert.equal(a.result.episodeReward, 15.7);
 assert.equal(a.result.targetId, "wreck-01");
-assert.ok(Math.abs(a.result.avgConfidence - 0.7137) < 0.001, `avg confidence drifted ${a.result.avgConfidence}`);
+assert.ok(Math.abs(a.result.avgConfidence - 0.725) < 0.001, `avg confidence drifted ${a.result.avgConfidence}`);
 assert.ok(Math.abs(a.result.durationS - 43.4) < 0.1, `duration drifted ${a.result.durationS}`);
 assert.ok(a.rl.done && a.rl.step > 0, "episode did not run");
 
@@ -322,6 +324,23 @@ assert.ok(c.result!.avgConfidence < a.result.avgConfidence, "turbidity did not r
   z.setScenario({ threshold: 0.3 });
   checkedTick(z, 0.3);
   assert.ok(z.detections.length <= 1 && z.detections.every((d) => d.class === "UNKNOWN" && d.confidence < 0.35), "turbidity 1 classified something");
+}
+
+{
+  // At the park pose the mine reads about 65.5 percent, inside the jitter band of the 0.65 classify
+  // threshold. Its label must hold steady instead of flipping MINE / UNKNOWN at the detector rate.
+  const f = new SimEngine();
+  let last = "";
+  let flips = 0;
+  for (let i = 0; i < 1000; i++) {
+    f.tick(0.1);
+    const d = f.detections.find((x) => x.trueType === "MINE");
+    const c = d ? d.class : "-";
+    if (last && last !== "-" && c !== last) flips++;
+    last = c;
+  }
+  assert.equal(last, "MINE", "mine not classified at the park pose");
+  assert.equal(flips, 0, `mine label flickered ${flips} times in 100 s at the park pose`);
 }
 
 // ---------------------------------------------------------------- controller
@@ -587,6 +606,245 @@ assert.ok(c.result!.avgConfidence < a.result.avgConfidence, "turbidity did not r
   // User stops the engine mid-scan: TRACKED would wait forever for COMPLETE.
   const stopped = runDemo((e, t) => t > 25 && e.mode === "TEST" && e.stopAuto());
   assert.ok(stopped.t <= bound && stopped.e.mode === "IDLE", `stopped demo took ${stopped.t.toFixed(1)} s`);
+}
+
+// ---------------------------------------------------------------- water optics
+{
+  const close = (a: number, b: number, tol: number, what: string) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
+  // Pope and Fry 1997 at 610, 540, 465 nm, converted from cm^-1
+  assert.deepEqual([...PURE_WATER_ABSORPTION], [0.2644, 0.0474, 0.01011]);
+  const pure = waterOptics({ ...tankWater(0), cdom440: 0 });
+  // pure water: red is absorbed hardest, blue travels farthest, and the veil is blue
+  assert.ok(pure.c[0] > pure.c[1] && pure.c[1] > pure.c[2], `pure water c not red > green > blue: ${pure.c}`);
+  assert.ok(pure.rInf[2] > pure.rInf[1] && pure.rInf[1] > pure.rInf[0], `pure water veil not blue: ${pure.rInf}`);
+  // Morel 1974 pure water scattering at 540 nm, about 0.0021 m^-1
+  close(pure.b[1], 0.00288 * Math.pow(540 / 500, -4.32), 1e-12, "pure water b(540)");
+  for (const o of [pure, waterOptics(tankWater(0.5)), waterOptics(tankWater(1))])
+    for (let i = 0; i < 3; i++) {
+      close(o.c[i], o.a[i] + o.b[i], 1e-12, "c = a + b");
+      assert.ok(o.kd[i] >= o.a[i] - 1e-12 && o.kd[i] <= o.c[i] / 0.87 + 1e-9, `Kd outside [a, c/mu0] in channel ${i}`);
+      assert.ok(o.rInf[i] > 0 && o.rInf[i] < 0.33, `rInf out of range ${o.rInf[i]}`);
+    }
+  // turbidity is monotonic: more silt means more attenuation and shorter visibility in every channel
+  let prev = waterOptics(tankWater(0));
+  for (let t = 0.05; t <= 1.0001; t += 0.05) {
+    const o = waterOptics(tankWater(t));
+    for (let i = 0; i < 3; i++) assert.ok(o.c[i] > prev.c[i] && o.kd[i] > prev.kd[i], `not monotonic at turbidity ${t.toFixed(2)}`);
+    prev = o;
+  }
+  // the NTU mapping: quadratic, clamped, NaN-safe
+  close(tankNtu(1), TANK_MAX_NTU, 1e-12, "max NTU");
+  close(tankNtu(0.15), 0.45, 1e-12, "default NTU");
+  assert.equal(tankNtu(NaN), 0);
+  assert.equal(tankNtu(-1), 0);
+  assert.equal(tankNtu(7), TANK_MAX_NTU);
+  // default tank water is clear (several metres of visibility); full silt hides the floor from the lens (0.42 m)
+  assert.ok(visibilityRange(waterOptics(tankWater(0.15)).c[1]) > 5, "default tank water is not clear");
+  assert.ok(visibilityRange(waterOptics(tankWater(1)).c[1]) < 0.42, "full silt still shows the floor");
+  assert.equal(visibilityRange(0), Infinity);
+  // detection reads the same water: contrast survives clear water, dies at the threshold, never rises with silt
+  const ratio = (t: number, d: number) => contrastRatio(waterOptics(tankWater(t)), { pathM: d, objectDepthM: 0.46, veilDepthM: 0.25 });
+  assert.ok(ratio(0, 0.42) > 0.99, `clear water lost contrast ${ratio(0, 0.42)}`);
+  close(ratio(0.5, 0), 1, 1e-12, "zero path keeps full contrast");
+  assert.equal(waterDetectability(1), 1);
+  assert.equal(waterDetectability(CONTRAST_THRESHOLD), 0);
+  assert.equal(waterDetectability(0), 0);
+  assert.equal(waterDetectability(NaN), 0);
+  let last = 2;
+  for (let t = 0; t <= 1.0001; t += 0.05) {
+    const r = ratio(t, 0.42);
+    assert.ok(r < last, `contrast did not fall with turbidity at ${t.toFixed(2)}`);
+    last = r;
+  }
+  assert.equal(waterDetectability(ratio(1, 0.42)), 0, "full silt still detectable");
+}
+
+// ---------------------------------------------------------------- smooth, straight motion
+{
+  // a diagonal move is a straight line: both axes arrive together
+  const e = new SimEngine();
+  const [x0, y0] = [e.gantry.x.pos, e.gantry.y.pos];
+  e.moveTo(5, 5);
+  let dev = 0;
+  for (let i = 0; i < 120 * 20 && (e.gantry.moving || i === 0); i++) {
+    e.tick(1 / 120);
+    const t = ((e.gantry.x.pos - x0) * (5 - x0) + (e.gantry.y.pos - y0) * (5 - y0)) / ((5 - x0) ** 2 + (5 - y0) ** 2);
+    dev = Math.max(dev, Math.hypot(e.gantry.x.pos - (x0 + t * (5 - x0)), e.gantry.y.pos - (y0 + t * (5 - y0))));
+  }
+  assert.ok(at(e, 5, 5), "diagonal move did not arrive");
+  assert.ok(dev < 0.1, `diagonal move left the straight line by ${dev.toFixed(3)} cm`);
+
+  // live steering: retarget every 50 ms across the travel; the carriage never passes a target it was braking for
+  const r = new SimEngine();
+  for (let k = 0; k < 40; k++) {
+    r.moveTo(k % 2 ? 90 : 10, k % 3 ? 35 : 5);
+    for (let i = 0; i < 6; i++) r.tick(1 / 120);
+  }
+  r.moveTo(50, 20);
+  let overshoot = 0;
+  for (let i = 0; i < 120 * 20 && r.gantry.moving; i++) {
+    const before = Math.sign(50 - r.gantry.x.pos);
+    r.tick(1 / 120);
+    if (Math.sign(50 - r.gantry.x.pos) === -before && before !== 0) overshoot = Math.max(overshoot, Math.abs(r.gantry.x.pos - 50));
+  }
+  assert.ok(at(r, 50, 20), "steered carriage did not settle on its last target");
+  assert.ok(overshoot < GANTRY.arriveTolerance + 0.05, `steered carriage overshot by ${overshoot.toFixed(3)} cm`);
+
+  // the render pose always lies between the last two substeps and equals the state when the accumulator is empty
+  const v = new SimEngine();
+  v.moveTo(90, 35);
+  for (let i = 0; i < 300; i++) {
+    v.tick(1 / 144);
+    const p = v.renderPose();
+    assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), "render pose not finite");
+    assert.ok(Math.abs(p.x - v.gantry.x.pos) <= 0.2 && Math.abs(p.y - v.gantry.y.pos) <= 0.2, "render pose strayed from the carriage");
+  }
+  v.reset();
+  const after = v.renderPose();
+  assert.ok(Math.abs(after.x - v.gantry.x.pos) < 1e-9 && Math.abs(after.y - v.gantry.y.pos) < 1e-9, "render pose smeared across a reset");
+}
+
+// ---------------------------------------------------------------- lamp light (deep sea)
+{
+  const at = (lighting: number, gx: number, gy: number, id: string) => {
+    const sc = { ...defaultScenario(), environment: "deepsea" as const, turbidity: 0.3, lighting, threshold: 0 };
+    return runDetection({ gantryX: gx, gantryY: gy, scenario: sc, time: 0, previous: new Map(), dt: 0.1 }).detections.find((d) => d.objectId === id)?.confidence ?? 0;
+  };
+  // lamp power matters: the centred wreck brightens with every step of power
+  let prevLamp = -1;
+  for (const l of [0.1, 0.3, 0.5, 0.8, 1]) {
+    const c = at(l, 60, 26, "wreck-01");
+    assert.ok(c > prevLamp, `deep-sea wreck did not brighten with lamp power at ${l}`);
+    prevLamp = c;
+  }
+  assert.ok(at(0.1, 60, 26, "wreck-01") < 0.4, "dim lamps still see the wreck clearly");
+  // inverse square: the same object reads lower at the edge of the lamp pool than under the lamps
+  assert.ok(at(0.8, 32, 8, "mine-01") > at(0.8, 50, 20, "mine-01"), "an object far from the lamps is not dimmer");
+  assert.equal(lampLight(0, 0.1, 0.4), 0);
+  assert.equal(lampLight(NaN, 0.1, 0.4), 0);
+  assert.ok(lampLight(1, 0, 0.01) <= 1, "lamp light not clamped at close range");
+}
+
+// ---------------------------------------------------------------- store reset keeps the environment
+{
+  const st = useSimStore.getState();
+  st.setScenario({ environment: "river", turbidity: 0.9, lighting: 0.2 });
+  useSimStore.getState().reset();
+  const r = useSimStore.getState().scenario;
+  assert.equal(r.environment, "river", "reset left the chosen environment");
+  assert.equal(r.turbidity, ENVIRONMENTS.river.defaults.turbidity, "reset did not restore the river's default water");
+  assert.equal(r.lighting, ENVIRONMENTS.river.defaults.lighting, "reset did not restore the river's default light");
+  useSimStore.getState().setScenario({ environment: "tank" });
+  useSimStore.getState().reset();
+  assert.deepEqual(useSimStore.getState().scenario, defaultScenario(), "tank reset is not the default scenario");
+}
+
+// ---------------------------------------------------------------- environments
+{
+  // The tank environment is the tank water the optics module describes, field for field.
+  for (const t of [0, 0.1, 0.15, 0.5, 0.77, 1, -1, 7, NaN])
+    assert.deepEqual(tankWater(t), environmentWater(ENVIRONMENTS.tank, t), `tankWater(${t}) differs from the tank environment`);
+
+  // NTU per environment: monotonic in the control, inside ntuRange, clamped and NaN-safe.
+  for (const id of ENVIRONMENT_IDS) {
+    const env = ENVIRONMENTS[id];
+    const [lo, hi] = env.ntuRange;
+    assert.ok(lo >= 0 && hi > lo, `${id} ntuRange not increasing`);
+    assert.equal(environmentNtu(env, 0), lo, `${id} NTU at turbidity 0`);
+    assert.equal(environmentNtu(env, 1), hi, `${id} NTU at turbidity 1`);
+    for (const bad of [NaN, Infinity, -Infinity, -1]) assert.equal(environmentNtu(env, bad), lo, `${id} NTU on ${bad}`);
+    assert.equal(environmentNtu(env, 7), hi, `${id} NTU above 1`);
+    let prevNtu = -1;
+    for (let t = 0; t <= 1.0001; t += 0.05) {
+      const n = environmentNtu(env, t);
+      assert.ok(n > prevNtu && n >= lo && n <= hi, `${id} NTU ${n} not monotonic or out of range at ${t.toFixed(2)}`);
+      prevNtu = n;
+    }
+    assert.equal(env.id, id, `${id} has the wrong id`);
+  }
+
+  // Switching applies that environment's defaults; a patch that also sets turbidity or lighting keeps them.
+  const s = new SimEngine();
+  assert.equal(s.scenario.environment, "tank", "default environment is not the tank");
+  for (const id of ENVIRONMENT_IDS) {
+    if (id === "tank") continue;
+    s.setScenario({ environment: id });
+    assert.equal(s.scenario.environment, id);
+    assert.deepEqual([s.scenario.turbidity, s.scenario.lighting], [ENVIRONMENTS[id].defaults.turbidity, ENVIRONMENTS[id].defaults.lighting], `${id} defaults not applied`);
+    s.setScenario({ environment: "tank" });
+    s.setScenario({ environment: id, turbidity: 0.55 });
+    assert.deepEqual([s.scenario.environment, s.scenario.turbidity, s.scenario.lighting], [id, 0.55, ENVIRONMENTS[id].defaults.lighting], `${id} patch turbidity lost`);
+    // Re-selecting the same environment is not a switch and keeps the current water.
+    s.setScenario({ environment: id });
+    assert.equal(s.scenario.turbidity, 0.55, `re-selecting ${id} reapplied its defaults`);
+    s.setScenario({ environment: "tank" });
+    assert.deepEqual([s.scenario.turbidity, s.scenario.lighting], [ENVIRONMENTS.tank.defaults.turbidity, ENVIRONMENTS.tank.defaults.lighting], "tank defaults not restored");
+  }
+  // Invalid ids are ignored, and the rest of the patch still applies.
+  s.setScenario({ environment: "harbor" });
+  const before = JSON.stringify(s.scenario);
+  for (const bad of ["ocean", "", "TANK", null, undefined, 3, NaN])
+    s.setScenario({ environment: bad as unknown as "tank" });
+  assert.equal(JSON.stringify(s.scenario), before, "an invalid environment changed the scenario");
+  s.setScenario({ environment: "lake" as unknown as "tank", turbidity: 0.4 });
+  assert.deepEqual([s.scenario.environment, s.scenario.turbidity], ["harbor", 0.4], "invalid environment blocked the rest of the patch");
+
+  // A full test run in open water records the environment and replays bit-identically.
+  const field = () => {
+    const e = new SimEngine();
+    e.setScenario({ environment: "harbor" });
+    return runFullTest(e);
+  };
+  const h1 = field();
+  const h2 = field();
+  assert.equal(h1.result!.environment, "harbor", "result did not record the environment");
+  assert.equal(h1.result!.turbidity, ENVIRONMENTS.harbor.defaults.turbidity);
+  assert.deepEqual(h1.result, h2.result, "harbor replay is not deterministic");
+  assert.deepEqual(h1.events, h2.events, "harbor replay event logs differ");
+  assert.equal(a.result.environment, "tank", "golden run did not record the tank");
+
+  // The centred wreck (gantry at 60, 26) in every environment.
+  const wreckAt = (environment: (typeof ENVIRONMENT_IDS)[number], turbidity: number, lighting: number, threshold = 0.3) => {
+    const sc = { ...defaultScenario(), environment, turbidity, lighting, threshold };
+    const out = runDetection({ gantryX: 60, gantryY: 26, scenario: sc, time: 0, previous: new Map(), dt: 0.1 });
+    return out.detections.find((d) => d.objectId === "wreck-01");
+  };
+  const defaultThreshold = defaultScenario().threshold;
+  for (const id of ENVIRONMENT_IDS) {
+    const { turbidity, lighting } = ENVIRONMENTS[id].defaults;
+    // Confidence never rises with turbidity (same tick, so the seeded jitter is the same).
+    let lastConf = Infinity;
+    for (let t = 0; t <= 1.0001; t += 0.05) {
+      const c = wreckAt(id, t, lighting)?.confidence ?? 0;
+      assert.ok(c <= lastConf + 1e-12, `${id} wreck confidence rose with turbidity at ${t.toFixed(2)}: ${c} > ${lastConf}`);
+      lastConf = c;
+    }
+    // At the environment's own default water the centred wreck is found at the default threshold.
+    const d = wreckAt(id, turbidity, lighting, defaultThreshold);
+    assert.ok(d, `${id}: centred wreck not detected at its default turbidity ${turbidity}`);
+  }
+  // With the lamps off nothing is seen in the deep sea, at any turbidity.
+  for (const t of [0, 0.3, 1]) {
+    const sc = { ...defaultScenario(), environment: "deepsea" as const, turbidity: t, lighting: 0, threshold: 0.3 };
+    for (let gx = 0; gx <= GANTRY.travelX; gx += 10)
+      for (let gy = 0; gy <= GANTRY.travelY; gy += 10) {
+        const out = runDetection({ gantryX: gx, gantryY: gy, scenario: sc, time: 0, previous: new Map(), dt: 0.1 });
+        assert.equal(out.detections.length, 0, `deep sea with lamps off detected something at (${gx}, ${gy}) turbidity ${t}`);
+      }
+  }
+
+  // Back to the tank: the exact golden run, on an engine that has been to every other environment.
+  const back = new SimEngine();
+  for (const id of ENVIRONMENT_IDS) back.setScenario({ environment: id });
+  back.setScenario({ environment: "tank" });
+  runFullTest(back);
+  assert.deepEqual(back.result, r1, "returning to the tank did not restore the golden run");
+  assert.deepEqual(back.events, ev1, "returning to the tank changed the golden log");
+  // Same, on an engine that completed a field run first.
+  h1.setScenario({ environment: "tank" });
+  h1.reset();
+  runFullTest(h1);
+  assert.deepEqual(h1.result, r1, "a field run left state behind in the tank");
 }
 
 console.log("sim:check OK");

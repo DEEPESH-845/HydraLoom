@@ -262,8 +262,9 @@ export function Gantry() {
   }, []);
 
   useFrame(() => {
-    const g = useSimStore.getState().engine.gantry;
-    const [wx, wz] = gantryToWorld(g.x.pos, g.y.pos);
+    // interpolated between simulation substeps so the motion is smooth at any display rate
+    const p = useSimStore.getState().engine.renderPose();
+    const [wx, wz] = gantryToWorld(p.x, p.y);
     if (beamRef.current) beamRef.current.position.x = wx + BEAM_OFFSET_X;
     if (carriageRef.current) carriageRef.current.position.z = wz;
 

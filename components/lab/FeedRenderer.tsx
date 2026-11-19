@@ -5,10 +5,19 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { CAMERA, gantryToWorld } from "@/lib/sim/constants";
 import { FEED_ELEMENT_ID, useSimStore } from "@/lib/sim/store";
+import { ENVIRONMENTS, environmentWater, lightPaths } from "@/lib/sim/environments";
+import { TANK } from "@/lib/sim/constants";
+import { OVERVIEW_FILL_INTENSITY, overviewFill } from "./TankDressing";
+import { TANK_WATER_BOX, patchSceneWater, setWater, waterTime, waterUniforms } from "./water";
 
-const CLEAR_FOG = new THREE.Color("#2a6f7a");
-const MURKY_FOG = new THREE.Color("#4f5c34");
-const DARK_FOG = new THREE.Color("#050807");
+/** HUD overlays live on this layer and are drawn on top of the world, so the water model skips them. */
+const OVERLAY_LAYER = 2;
+
+/**
+ * Linear radiance of a white diffuse surface under the lab lights at full lighting, in the renderer's units.
+ * Scales the veiling light so murky water is as bright as the lights that illuminate it.
+ */
+const WHITE_AT_FULL_LIGHT = 0.9;
 
 /** Live draw call count of the last frame (main pass + feed pass), for profiling. */
 export const renderStats = { calls: 0, triangles: 0 };
@@ -27,11 +36,8 @@ export const feedCam = (() => {
   cam.layers.set(0); // mast and housing live on layer 1 and are excluded
   return cam;
 })();
-const fog = new THREE.FogExp2(CLEAR_FOG.clone(), 1);
-/** Main-pass silt fog. Only underwater materials keep fog enabled, so above-water parts stay crisp. */
-const mainFog = new THREE.FogExp2(new THREE.Color("#2f8a93"), 0.15);
-const MAIN_CLEAR = new THREE.Color("#2f8a93");
-const MAIN_SILT = new THREE.Color("#5c6b3c");
+/** Colour the feed clears to: the veiling light, which is what an under-water camera sees at infinite range. */
+const feedBackground = new THREE.Color();
 
 interface FeedRect {
   el: HTMLElement | null;
@@ -69,20 +75,46 @@ export function FeedRenderer() {
     const fullW = canvas.clientWidth * pr;
     const fullH = canvas.clientHeight * pr;
 
-    const { turbidity: t, lighting } = useSimStore.getState().engine.scenario;
-    mainFog.color.lerpColors(MAIN_CLEAR, MAIN_SILT, t);
-    // lower base than the audit suggested: fog is camera distance, and from preset A the sand is 2.6 m away
-    mainFog.density = 0.06 + 1.6 * t * t;
-    scene.fog = mainFog;
+    const { turbidity, lighting, environment } = useSimStore.getState().engine.scenario;
+    const env = ENVIRONMENTS[environment];
+    // interpolated between simulation substeps so the carriage, lamps and feed glide at any display rate
+    const pose = useSimStore.getState().engine.renderPose();
+    const [wx, wz] = gantryToWorld(pose.x, pose.y);
+    // One physical water model for both passes: components/lab/water.ts. Patching is idempotent and cheap,
+    // and picks up meshes that mount later (scenario objects, a newly selected environment).
+    patchSceneWater(scene, OVERLAY_LAYER);
+    const lamp = env.light === "lamp";
+    const optics = setWater(environmentWater(env, turbidity), {
+      // lamps are sized for the floor at full power; daylight and the lab lights never go fully dark
+      white: WHITE_AT_FULL_LIGHT * (lamp ? lighting : 0.08 + 0.92 * lighting),
+      // every environment is emulated in the tank: its water, its floor, and its light at depth
+      surfaceY: TANK.waterLevel,
+      columnM: env.columnM,
+      lamp,
+      lampHeight: CAMERA.lensHeight,
+      box: TANK_WATER_BOX,
+    });
+    waterUniforms.uWaterLampPos.value.set(wx, CAMERA.lensHeight + 0.02, wz);
+    waterUniforms.uWaterTime.value = waterTime(state.clock.elapsedTime);
+    // the tank is always shown as it is
+    const viewScale = 1;
+    waterUniforms.uWaterViewScale.value = viewScale;
+    // the deep's overview fill lights the main pass only
+    overviewFill.intensity = lamp ? OVERVIEW_FILL_INTENSITY : 0;
+    scene.fog = null;
 
     // Shadow maps are rendered once per frame, in the main pass only.
     gl.shadowMap.autoUpdate = false;
     gl.shadowMap.needsUpdate = true;
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);
+    waterUniforms.uWaterViewportH.value = fullH;
     gl.render(scene, camera);
     renderStats.calls = gl.info.render.calls;
     renderStats.triangles = gl.info.render.triangles;
+
+    // Explore mode hides the panels with visibility, which keeps the feed rect in layout; the feed must go with them.
+    if (useSimStore.getState().exploring) return;
 
     const f = feed.current;
     if (!f.el || !f.el.isConnected) {
@@ -111,28 +143,43 @@ export function FeedRenderer() {
     const h = Math.round(r.height * pr);
     if (x + w <= 0 || y + h <= 0 || x >= fullW || y >= fullH) return;
 
-    const g = useSimStore.getState().engine.gantry;
-    const [wx, wz] = gantryToWorld(g.x.pos, g.y.pos);
     feedCam.position.set(wx, CAMERA.lensHeight, wz);
     feedCam.lookAt(wx, 0, wz);
 
-    fog.color.lerpColors(CLEAR_FOG, MURKY_FOG, t).lerp(DARK_FOG, 1 - lighting);
-    fog.density = 0.6 + 2.4 * t;
+    // the camera feed always sees true water and only the rig's own light
+    waterUniforms.uWaterViewScale.value = 1;
+    overviewFill.intensity = 0;
+    // Auto-exposure, as the real camera does: expose for the mean of the frame (seabed seen through the water plus
+    // veil), so murky water reads as a properly exposed murky image instead of a near-black one. Exposure scales the
+    // whole frame, so contrast, and therefore detection, is unchanged.
+    const mainExposure = waterUniforms.uWaterExposure.value;
+    {
+      const d = CAMERA.lensHeight;
+      const paths = lightPaths(env, 0, d);
+      const t = Math.exp(-optics.c[1] * d);
+      const k = (optics.rInf[1] * Math.exp(-optics.kd[1] * paths.veilDepthM)) / (env.seabedReflectance * Math.exp(-optics.kd[1] * paths.objectDepthM));
+      const mean = t + k * (1 - t);
+      waterUniforms.uWaterExposure.value = mainExposure * Math.min(4, Math.max(1, 1 / Math.max(1e-3, mean)));
+    }
+    const binf = waterUniforms.uWaterBinf.value;
+    const exposure = waterUniforms.uWaterExposure.value;
+    feedBackground.setRGB(binf.x * exposure, binf.y * exposure, binf.z * exposure, THREE.LinearSRGBColorSpace);
 
     gl.setViewport(x, y, w, h);
+    waterUniforms.uWaterViewportH.value = h;
     gl.setScissor(x, y, w, h);
     gl.setScissorTest(true);
-    // A Color background forces a clear inside the scissor rect, so swap it for the fog colour.
+    // A Color background forces a clear inside the scissor rect, so swap it for the veiling light.
     const bg = scene.background;
-    scene.background = fog.color;
-    scene.fog = fog;
+    scene.background = feedBackground;
     gl.autoClear = false;
     gl.clear(true, true, false);
     gl.render(scene, feedCam);
     renderStats.calls += gl.info.render.calls;
     renderStats.triangles += gl.info.render.triangles;
     scene.background = bg;
-    scene.fog = mainFog;
+    waterUniforms.uWaterViewScale.value = viewScale;
+    waterUniforms.uWaterExposure.value = mainExposure;
     gl.autoClear = true;
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);

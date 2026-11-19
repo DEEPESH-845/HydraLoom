@@ -20,26 +20,37 @@ export function CameraFeed() {
   const { frame, x, y } = useSimStore(useShallow((s) => ({ frame: s.telemetry.camera.frame, x: s.telemetry.gantry.x, y: s.telemetry.gantry.y })));
 
   return (
-    <div className="panel border-line-strong">
-      <div className="flex items-center justify-between gap-2 border-b border-line px-2.5 py-1.5">
+    <div className="border border-line-strong">
+      <div className="flex items-center justify-between gap-2 border-b border-line bg-panel/92 px-2.5 py-1.5 max-[759px]:gap-1.5 max-[759px]:px-2">
         <div className="flex items-center gap-2 whitespace-nowrap">
-          <span className="label text-text">Camera feed</span>
+          {/* below 1000 px the 176 and 220 px feed headers only fit the tag and the position readout */}
+          <span className="label text-text max-[999px]:hidden">Camera feed</span>
           <span className="sim-tag">SIMULATED</span>
         </div>
         <span className="value whitespace-nowrap text-[9px] text-muted max-[999px]:hidden">
           {CAMERA.fps} FPS f{frame} {CAMERA.resolution.replace(" (simulated)", "")}
         </span>
         {/* compact column: the readout moves up here so it cannot collide with box tags in a 176 or 220 px feed */}
-        <span className="value whitespace-nowrap text-[10px] text-teal min-[1000px]:hidden">
-          X {f1(x)}&nbsp;&nbsp;Y {f1(y)}
+        {/* 9 px with a single gap below 760 px, so X 100.0 Y 40.0 still fits the 176 px header beside the tag */}
+        <span className="value flex gap-2 whitespace-nowrap text-[10px] text-teal min-[1000px]:hidden max-[759px]:gap-1.5 max-[759px]:text-[9px]">
+          <span>X {f1(x)}</span>
+          <span>Y {f1(y)}</span>
         </span>
       </div>
 
-      {/* The render is inset in the opaque panel so the feed reads as an instrument, not a hole into the 3D room. */}
+      {/*
+        The render is inset in a panel-coloured bezel so the feed reads as an instrument, not a hole into the 3D room.
+        The bezel is the feed's own box-shadow spread, never a background behind it: the WebGL render is painted on the
+        canvas underneath, so anything opaque over the #gantry-camera-feed rect hides the camera image.
+      */}
       <div className="p-1.5">
-        <div id={FEED_ELEMENT_ID} className="relative w-full overflow-hidden border border-line" style={{ aspectRatio: "4 / 3", background: "transparent" }}>
-          {/* a shade darker than the lab view, plus lens fall-off, so the inset reads as a camera, not a viewport */}
-          <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse at center, rgba(0,0,0,0.22) 50%, rgba(0,0,0,0.55) 100%)" }} />
+        <div
+          id={FEED_ELEMENT_ID}
+          className="relative w-full overflow-hidden border border-line"
+          style={{ aspectRatio: "4 / 3", background: "transparent", boxShadow: "0 0 0 6px color-mix(in oklab, var(--color-panel) 92%, transparent)" }}
+        >
+          {/* lens fall-off so the inset reads as a camera, not a viewport */}
+          <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.4) 100%)" }} />
           {/* crosshair */}
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-teal/70" />
           <div className="pointer-events-none absolute left-1/2 top-1/2 h-px w-4 -translate-x-1/2 -translate-y-1/2 bg-teal/70" />

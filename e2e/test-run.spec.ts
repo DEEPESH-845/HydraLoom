@@ -12,7 +12,7 @@ test.describe("test run", () => {
     await lab.waitFor((s) => s.phase === "COMPLETE", 90_000);
     const r1 = await lab.state((s) => s.result!);
     expect(r1.objectsDetected).toBe(5);
-    expect(r1.successfulDetections).toBe(3);
+    expect(r1.successfulDetections).toBe(4);
     expect(r1.falsePositives).toBe(1);
     expect(r1.coverage).toBeCloseTo(0.9, 2);
     expect(r1.targetId).toBe("wreck-01");
