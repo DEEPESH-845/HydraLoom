@@ -9,6 +9,7 @@ import { ENVIRONMENTS, environmentWater, lightPaths } from "@/lib/sim/environmen
 import { TANK } from "@/lib/sim/constants";
 import { OVERVIEW_FILL_INTENSITY, overviewFill } from "./TankDressing";
 import { TANK_WATER_BOX, patchSceneWater, setWater, waterTime, waterUniforms } from "./water";
+import { waterOptics } from "@/lib/optics/water";
 
 /** HUD overlays live on this layer and are drawn on top of the world, so the water model skips them. */
 const OVERLAY_LAYER = 2;
@@ -37,13 +38,62 @@ export const feedCam = (() => {
   return cam;
 })();
 /** Colour the feed clears to: the veiling light, which is what an under-water camera sees at infinite range. */
-const feedBackground = new THREE.Color();
+export const feedBackground = new THREE.Color();
 
 interface FeedRect {
   el: HTMLElement | null;
   rect: DOMRect | null;
   dirty: boolean;
   ro: ResizeObserver | null;
+}
+
+/**
+ * Applies the lab water for the selected in-tank environment to the shared uniforms, with the rig lamps at the
+ * carriage (world x, z of the lens). The same call drives the live render loop and the dataset capture.
+ */
+export function labWater(wx: number, wz: number): { lamp: boolean } {
+  const { turbidity, lighting, environment } = useSimStore.getState().engine.scenario;
+  const env = ENVIRONMENTS[environment];
+  const lamp = env.light === "lamp";
+  setWater(environmentWater(env, turbidity), {
+    // lamps are sized for the floor at full power; daylight and the lab lights never go fully dark
+    white: WHITE_AT_FULL_LIGHT * (lamp ? lighting : 0.08 + 0.92 * lighting),
+    // every environment is emulated in the tank: its water, its floor, and its light at depth
+    surfaceY: TANK.waterLevel,
+    columnM: env.columnM,
+    lamp,
+    lampHeight: CAMERA.lensHeight,
+    box: TANK_WATER_BOX,
+  });
+  waterUniforms.uWaterLampPos.value.set(wx, CAMERA.lensHeight + 0.02, wz);
+  return { lamp };
+}
+
+/**
+ * Switches the uniforms from the main view to the camera feed: true water, only the rig's own light, auto-exposure.
+ * Sets `feedBackground` to the veiling light. Returns the main pass exposure so the caller can restore it.
+ */
+export function labFeedPass(): number {
+  const { turbidity, environment } = useSimStore.getState().engine.scenario;
+  const env = ENVIRONMENTS[environment];
+  const optics = waterOptics(environmentWater(env, turbidity));
+  // the camera feed always sees true water and only the rig's own light
+  waterUniforms.uWaterViewScale.value = 1;
+  overviewFill.intensity = 0;
+  // Auto-exposure, as the real camera does: expose for the mean of the frame (seabed seen through the water plus
+  // veil), so murky water reads as a properly exposed murky image instead of a near-black one. Exposure scales the
+  // whole frame, so contrast, and therefore detection, is unchanged.
+  const mainExposure = waterUniforms.uWaterExposure.value;
+  const d = CAMERA.lensHeight;
+  const paths = lightPaths(env, 0, d);
+  const t = Math.exp(-optics.c[1] * d);
+  const k = (optics.rInf[1] * Math.exp(-optics.kd[1] * paths.veilDepthM)) / (env.seabedReflectance * Math.exp(-optics.kd[1] * paths.objectDepthM));
+  const mean = t + k * (1 - t);
+  waterUniforms.uWaterExposure.value = mainExposure * Math.min(4, Math.max(1, 1 / Math.max(1e-3, mean)));
+  const binf = waterUniforms.uWaterBinf.value;
+  const exposure = waterUniforms.uWaterExposure.value;
+  feedBackground.setRGB(binf.x * exposure, binf.y * exposure, binf.z * exposure, THREE.LinearSRGBColorSpace);
+  return mainExposure;
 }
 
 export function FeedRenderer() {
@@ -75,26 +125,13 @@ export function FeedRenderer() {
     const fullW = canvas.clientWidth * pr;
     const fullH = canvas.clientHeight * pr;
 
-    const { turbidity, lighting, environment } = useSimStore.getState().engine.scenario;
-    const env = ENVIRONMENTS[environment];
     // interpolated between simulation substeps so the carriage, lamps and feed glide at any display rate
     const pose = useSimStore.getState().engine.renderPose();
     const [wx, wz] = gantryToWorld(pose.x, pose.y);
     // One physical water model for both passes: components/lab/water.ts. Patching is idempotent and cheap,
     // and picks up meshes that mount later (scenario objects, a newly selected environment).
     patchSceneWater(scene, OVERLAY_LAYER);
-    const lamp = env.light === "lamp";
-    const optics = setWater(environmentWater(env, turbidity), {
-      // lamps are sized for the floor at full power; daylight and the lab lights never go fully dark
-      white: WHITE_AT_FULL_LIGHT * (lamp ? lighting : 0.08 + 0.92 * lighting),
-      // every environment is emulated in the tank: its water, its floor, and its light at depth
-      surfaceY: TANK.waterLevel,
-      columnM: env.columnM,
-      lamp,
-      lampHeight: CAMERA.lensHeight,
-      box: TANK_WATER_BOX,
-    });
-    waterUniforms.uWaterLampPos.value.set(wx, CAMERA.lensHeight + 0.02, wz);
+    const { lamp } = labWater(wx, wz);
     waterUniforms.uWaterTime.value = waterTime(state.clock.elapsedTime);
     // the tank is always shown as it is
     const viewScale = 1;
@@ -146,25 +183,7 @@ export function FeedRenderer() {
     feedCam.position.set(wx, CAMERA.lensHeight, wz);
     feedCam.lookAt(wx, 0, wz);
 
-    // the camera feed always sees true water and only the rig's own light
-    waterUniforms.uWaterViewScale.value = 1;
-    overviewFill.intensity = 0;
-    // Auto-exposure, as the real camera does: expose for the mean of the frame (seabed seen through the water plus
-    // veil), so murky water reads as a properly exposed murky image instead of a near-black one. Exposure scales the
-    // whole frame, so contrast, and therefore detection, is unchanged.
-    const mainExposure = waterUniforms.uWaterExposure.value;
-    {
-      const d = CAMERA.lensHeight;
-      const paths = lightPaths(env, 0, d);
-      const t = Math.exp(-optics.c[1] * d);
-      const k = (optics.rInf[1] * Math.exp(-optics.kd[1] * paths.veilDepthM)) / (env.seabedReflectance * Math.exp(-optics.kd[1] * paths.objectDepthM));
-      const mean = t + k * (1 - t);
-      waterUniforms.uWaterExposure.value = mainExposure * Math.min(4, Math.max(1, 1 / Math.max(1e-3, mean)));
-    }
-    const binf = waterUniforms.uWaterBinf.value;
-    const exposure = waterUniforms.uWaterExposure.value;
-    feedBackground.setRGB(binf.x * exposure, binf.y * exposure, binf.z * exposure, THREE.LinearSRGBColorSpace);
-
+    const mainExposure = labFeedPass();
     gl.setViewport(x, y, w, h);
     waterUniforms.uWaterViewportH.value = h;
     gl.setScissor(x, y, w, h);

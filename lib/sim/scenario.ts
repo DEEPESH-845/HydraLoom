@@ -87,5 +87,7 @@ export function defaultScenario(): Scenario {
     threshold: 0.6,
     gantrySpeed: 0.65,
     seed: TEST.seed,
+    strategy: "serpentine",
+    waypoints: [],
   };
 }

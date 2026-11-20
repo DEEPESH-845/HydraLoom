@@ -1,6 +1,12 @@
 # GANTRYLAB
 
-**An interactive prototype of a physical underwater robotics testbed.**
+**A browser-based underwater robotics digital twin and model-evaluation platform, with the physical Gantry Lab testbed as one of its modes.**
+
+- Six field environments (harbor, river, deep sea, coral reef, lake, open ocean) with their own water, terrain, current and targets; an ROV, an AUV or a seabed camera station flies in them under six-degree-of-freedom dynamics and a configurable water current.
+- The Gantry Lab (`/lab`): the bench-top aquarium and XY gantry described below.
+- Synthetic, ground-truth-labelled datasets from either mode; upload a YOLO `best.pt` or ONNX model, evaluate it on the backend, and get an evidence-grounded engineering report.
+
+Architecture: `docs/ARCHITECTURE.md`. Physics and assumptions: `docs/PHYSICS.md`. Backend API: `docs/API_V1.md` and `backend/README_GANTRYLAB.md`.
 
 Testing underwater drones and their perception systems in rivers, lakes and reservoirs is expensive, slow, risky and hard to repeat.
 GANTRYLAB is a controlled alternative: an aquarium with printed test objects on a sand floor, a motorized XY gantry above it carrying a downward-facing camera, a Raspberry Pi running object detection, a control policy that decides where to move the camera, and an Arduino driving the motors.
@@ -25,13 +31,23 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000.
-The scene index on the left walks through seven scenes; `RUN DEMO` plays an autonomous narrated sequence of about 75 seconds.
+Open http://localhost:3000 for the platform (environments, platforms, simulation, live analysis), http://localhost:3000/lab for the Gantry Lab, `/models` for the Model Lab and `/reports` for analysis and reports.
+In the Gantry Lab the scene index on the left walks through seven scenes; `RUN DEMO` plays an autonomous narrated sequence of about 75 seconds.
+
+The Model Lab and Reports need the evaluation backend:
+
+```bash
+cd backend
+# one-time install: the exact commands are in backend/README_GANTRYLAB.md (CUDA 12.8 or CPU torch wheels)
+.venv/Scripts/python -m uvicorn gantrylab.app:app --port 8000
+```
 
 Other scripts:
 
 | Command | What it does |
 |---|---|
+| `npm run test:unit` | Unit tests of the physics, field engine, environments, gantry strategies and hardware safety (`lib/**/*.test.ts`) |
+| `npm run e2e` | Playwright suite (lab, field, capture, evaluation UI) |
 | `npm run sim:check` | Headless check of the simulation engine: determinism, rail limits, a full test run, a hard scenario, motion settling |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
@@ -95,7 +111,8 @@ components/lab/         Three.js scene: aquarium, gantry, electronics, test obje
 components/ui/          DOM overlay: top bar, scene rail, camera feed frame, telemetry, scene cards, demo controller, closing moment
 lib/sim/                Simulation engine (constants, types, scenario, gantry, detection, policy, engine, demo, store, selfcheck)
 docs/BLUEPRINT.md       System specification
-backend/                FastAPI service with YOLOv8, MJPEG streaming and a UART serial bridge (hardware path, not used by the browser prototype)
+backend/gantrylab/       evaluation service: model registry, sandboxed inference, metrics, reports, gantry safety
+backend/                legacy FastAPI service with YOLOv8, MJPEG streaming and a UART serial bridge (hardware path)
 ```
 
 ## From simulation to hardware

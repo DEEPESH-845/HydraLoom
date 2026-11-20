@@ -1,0 +1,54 @@
+[project]
+name = "gantrylab-backend"
+version = "0.1.0"
+description = "GANTRYLAB model-evaluation backend: model registry, synthetic dataset ingest, sandboxed inference, metrics and engineering reports."
+requires-python = ">=3.12,<3.13"
+# Exact versions installed and tested (Windows 11, Python 3.12.13, RTX 5070 Laptop / CUDA 12.8).
+# torch and torchvision come from the CUDA 12.8 index:
+#   uv pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+# On machines without an NVIDIA GPU use --index-url https://download.pytorch.org/whl/cpu instead.
+dependencies = [
+    "fastapi==0.165.0",
+    "starlette==1.10.0",
+    "uvicorn[standard]==0.54.0",
+    "websockets==17.4",
+    "python-multipart==0.0.34",
+    "pydantic==2.14.4",
+    "numpy==2.5.4",
+    "pillow==13.0.0",
+    "psutil==7.2.2",
+    "pyyaml==6.0.3",
+    "httpx==0.28.1",
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "ultralytics==8.4.215",
+    "onnx==1.23.2",
+    "onnxruntime==1.32.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==9.2.0",
+    "httpx2==2.16.2",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests_gantrylab"]
+markers = [
+    "real: runs real inference with backend/yolov8n.pt inside the sandbox (slow, needs torch and ultralytics)",
+]
+filterwarnings = [
+    "error::pytest.PytestUnraisableExceptionWarning",
+]

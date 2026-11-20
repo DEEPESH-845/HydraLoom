@@ -1,0 +1,50 @@
+# Hardened container for the GANTRYLAB sandbox worker.
+#
+# The default deployment runs the worker as a local subprocess with a scrubbed
+# environment, empty cwd, timeout and memory limit. For production, run the worker
+# inside this container so that a pickle exploit that escapes the restricted
+# unpickler still has no network, no writable root filesystem and no secrets.
+#
+# Build (from backend/):
+#   docker build -f gantrylab/sandbox/Dockerfile.worker -t gantrylab-worker .
+#
+# Run one job (models and frames mounted read-only, job JSON on stdin):
+#   docker run --rm -i \
+#     --network none \
+#     --read-only \
+#     --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+#     --tmpfs /home/worker:rw,noexec,nosuid,size=256m \
+#     --cap-drop ALL \
+#     --security-opt no-new-privileges \
+#     --pids-limit 64 \
+#     --memory 4g --memory-swap 4g --cpus 4 \
+#     -v "$PWD/data/models:/data/models:ro" \
+#     -v "$PWD/data/datasets:/data/datasets:ro" \
+#     gantrylab-worker infer < job.json
+#
+# Add `--gpus all` (NVIDIA Container Toolkit) for CUDA inference.
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    YOLO_CONFIG_DIR=/tmp/yolo \
+    YOLO_OFFLINE=True \
+    YOLO_AUTOINSTALL=False \
+    HOME=/home/worker \
+    GANTRYLAB_SANDBOX_HOME=/tmp
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 worker
+
+WORKDIR /opt/gantrylab
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir ultralytics onnx onnxruntime numpy pillow psutil pyyaml
+COPY gantrylab ./gantrylab
+
+USER worker
+WORKDIR /tmp
+ENTRYPOINT ["python", "-I", "-c", "import sys; sys.path.insert(0, '/opt/gantrylab'); import runpy; runpy.run_module('gantrylab.sandbox.worker', run_name='__main__', alter_sys=True)"]

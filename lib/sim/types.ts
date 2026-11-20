@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "./environments";
+import type { StrategyId } from "../gantry/strategies";
 export type ObjectType = "SHIPWRECK" | "MINE" | "DEBRIS";
 export type DetectedClass = ObjectType | "UNKNOWN";
 
@@ -102,6 +103,10 @@ export interface Scenario {
   /** 0.2..1 fraction of max gantry speed */
   gantrySpeed: number;
   seed: number;
+  /** how the SCAN phase picks viewpoints: lib/gantry/strategies.ts; serpentine is the original plan */
+  strategy: StrategyId;
+  /** user waypoints for the "waypoints" strategy, gantry cm */
+  waypoints: [number, number][];
 }
 
 export type RunPhase = "IDLE" | "HOMING" | "SCANNING" | "DETECTING" | "TRACKING" | "COMPLETE";
@@ -120,6 +125,15 @@ export interface TestResult {
   turbidity: number;
   lighting: number;
   threshold: number;
+  /** inspection strategy and its movement statistics */
+  strategy: StrategyId;
+  viewpoints: number;
+  /** carriage travel during the scan and tracking, cm */
+  pathCm: number;
+  /** ids of objects never detected */
+  missed: string[];
+  /** mean confidence gained by re-centring visits (detection-driven), null when none were made */
+  repositionGain: number | null;
 }
 
 export interface RunEvent {

@@ -164,7 +164,7 @@ The UI says exactly this: greedy on axis error, reward logged, not learned from.
 ### 4.4 Test runner
 
 0. HOME: the carriage drives to (0, 0) physically. The clock, seed and log restart on arrival, so a test is always the same pure function of scenario + seed no matter where the carriage was.
-1. SCAN: serpentine waypoints (x in 15, 50, 85, y in 10, 30).
+1. SCAN: viewpoints from the scenario's inspection strategy (`lib/gantry/strategies.ts`). The default, serpentine, is the original plan: waypoints x in 15, 50, 85, y in 10, 30, and reproduces the golden run exactly. Coverage, detection-driven, uncertainty-driven and user-waypoint strategies use the same interface; all are heuristics (docs/ARCHITECTURE.md section 6).
 2. At each waypoint run detection and record results.
 3. Pick the highest-confidence detection as the target.
 4. TRACK: run one RL episode toward the target.

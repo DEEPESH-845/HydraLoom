@@ -4,6 +4,7 @@ import { runDetection } from "./detection";
 import { createGantry, gantryAtTarget, setGantryTarget, stepGantry } from "./gantry";
 import { applyAction, decide, onTarget, reward } from "./policy";
 import { mulberry32 } from "./rng";
+import { createPlanner, isStrategyId, type ScanPlanner } from "../gantry/strategies";
 import { defaultScenario } from "./scenario";
 import type {
   Action,
@@ -82,6 +83,11 @@ export class SimEngine {
   private seen = new Map<string, Detection>();
   private covered = new Set<number>();
   private falsePositiveIds = new Set<string>();
+  private planner: ScanPlanner = createPlanner("serpentine");
+  private viewpoints = 0;
+  private pathCm = 0;
+  /** confidence of an object when a re-centring visit to it was planned, keyed by object id */
+  private revisitFrom = new Map<string, number>();
 
   // ---------- public commands ----------
 
@@ -128,6 +134,13 @@ export class SimEngine {
       threshold: clamp(finite(patch.threshold, s.threshold), 0.3, 0.95),
       gantrySpeed: clamp(finite(patch.gantrySpeed, s.gantrySpeed), 0.2, 1),
       seed: finite(patch.seed, s.seed) >>> 0,
+      strategy: isStrategyId(patch.strategy) ? patch.strategy : s.strategy,
+      waypoints: Array.isArray(patch.waypoints)
+        ? patch.waypoints
+            .filter((w) => Array.isArray(w) && Number.isFinite(w[0]) && Number.isFinite(w[1]))
+            .slice(0, 40)
+            .map(([x, y]) => [clamp(x, 0, GANTRY.travelX), clamp(y, 0, GANTRY.travelY)] as [number, number])
+        : s.waypoints,
     };
   }
 
@@ -183,7 +196,11 @@ export class SimEngine {
     this.mode = "TEST";
     this.phase = "SCANNING";
     this.log("PHASE", `TEST START seed ${this.scenario.seed}`);
-    this.gotoWaypoint();
+    this.planner = createPlanner(this.scenario.strategy, this.scenario.waypoints);
+    this.viewpoints = 0;
+    this.pathCm = 0;
+    this.revisitFrom.clear();
+    if (!this.planNext()) this.finishTest(null);
   }
 
   stopAuto(): void {
@@ -245,6 +262,7 @@ export class SimEngine {
     this.time += dt;
     this.frame = Math.floor(this.time * CAMERA.fps);
     stepGantry(this.gantry, dt, this.scenario.gantrySpeed);
+    if (this.mode === "TEST" && this.phase !== "HOMING") this.pathCm += Math.hypot(this.gantry.x.pos - this.prevPose.x, this.gantry.y.pos - this.prevPose.y);
 
     this.detectAccumulator += dt;
     if (this.detectAccumulator >= 1 / DETECTION.hz) {
@@ -393,10 +411,23 @@ export class SimEngine {
 
   // ---------- test runner ----------
 
-  private gotoWaypoint(): void {
-    const [x, y] = TEST.scanWaypoints[this.waypointIndex];
-    setGantryTarget(this.gantry, x, y);
-    this.log("WAYPOINT", `scan ${this.waypointIndex + 1}/${TEST.scanWaypoints.length} -> (${x}, ${y})`);
+  /** Asks the strategy for the next viewpoint and drives there; false when the scan is over. */
+  private planNext(): boolean {
+    const v = this.planner.next({ x: this.gantry.x.pos, y: this.gantry.y.pos, seen: this.seen, covered: this.covered, time: this.time });
+    if (!v) return false;
+    this.waypointIndex = this.viewpoints;
+    this.viewpoints += 1;
+    if (v.reason.startsWith("re-centre")) {
+      const id = v.reason.split(" ")[1];
+      const d = this.seen.get(id);
+      if (d) this.revisitFrom.set(id, d.confidence);
+    }
+    setGantryTarget(this.gantry, v.x, v.y);
+    const fx = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+    const of = this.planner.total !== null ? `/${this.planner.total}` : "";
+    const why = v.reason === "plan" || v.reason === "coverage" || v.reason === "user" ? "" : ` ${v.reason}`;
+    this.log("WAYPOINT", `scan ${this.viewpoints}${of} -> (${fx(v.x)}, ${fx(v.y)})${why}`);
+    return true;
   }
 
   private recordCoverage(): void {
@@ -438,10 +469,8 @@ export class SimEngine {
           this.log("DETECT", `${d.class} ${(d.confidence * 100).toFixed(1)}% at (${d.estX.toFixed(1)}, ${d.estY.toFixed(1)})`);
       }
       if (this.dwell < TEST.dwellSeconds) return;
-      this.waypointIndex += 1;
-      if (this.waypointIndex < TEST.scanWaypoints.length) {
+      if (this.planNext()) {
         this.phase = "SCANNING";
-        this.gotoWaypoint();
         return;
       }
       // Scan complete: choose the best correct-class detection as the tracking target.
@@ -480,6 +509,13 @@ export class SimEngine {
       turbidity: this.scenario.turbidity,
       lighting: this.scenario.lighting,
       threshold: this.scenario.threshold,
+      strategy: this.scenario.strategy,
+      viewpoints: this.viewpoints,
+      pathCm: this.pathCm,
+      missed: this.scenario.objects.filter((o) => !this.seen.has(o.id)).map((o) => o.id),
+      repositionGain: this.revisitFrom.size
+        ? [...this.revisitFrom].reduce((sum, [id, c0]) => sum + ((this.seen.get(id)?.confidence ?? c0) - c0), 0) / this.revisitFrom.size
+        : null,
     };
     this.phase = "COMPLETE";
     this.mode = "IDLE";

@@ -223,7 +223,7 @@ function Shipwreck({ m }: { m: Mats }) {
     <group>
       {/* mound, fragments and mast sit level on the sand; the hull lists 18 degrees. The mound rim sits below the
           lowest sand ripple so it tucks under the tank floor */}
-      <mesh geometry={geos.mound} material={m.sand} position={[0, -0.0365, 0]} receiveShadow />
+      <mesh geometry={geos.mound} material={m.sand} position={[0, -0.0365, 0]} receiveShadow userData={{ gtOccluder: true }} />
       <mesh geometry={geos.frags} material={m.rustV} position={[0, -0.023, 0]} castShadow receiveShadow />
       <mesh geometry={geos.mast} material={m.rustV} position={[0, -0.023, 0]} castShadow receiveShadow />
       <group rotation={[(18 * Math.PI) / 180, 0, 0]}>
@@ -605,6 +605,8 @@ function ObjectGroup({ o, tint }: { o: TestObject; tint: Tint }) {
     <group
       ref={ref}
       name={o.id}
+      // ground-truth tags for synthetic dataset capture (components/capture/core.ts)
+      userData={{ gtId: o.id, gtClass: o.type }}
       onClick={(e) => {
         e.stopPropagation();
         useSimStore.getState().selectObject(o.id);

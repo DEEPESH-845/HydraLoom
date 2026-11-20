@@ -18,6 +18,7 @@ import { SimDriver } from "./SimDriver";
 import { TestObjects } from "./TestObjects";
 import { mergeBoxes, std } from "./util";
 import { patchSceneWater, waterClock } from "./water";
+import { labGL, runLabCapture } from "./capture";
 
 const FLOOR_Y = -0.85;
 
@@ -174,6 +175,30 @@ function DressingWarmup() {
   return null;
 }
 
+/** Hands the live renderer and scene to the dataset capture (components/lab/capture.ts). */
+function LabCaptureBridge() {
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  useEffect(() => {
+    labGL.gl = gl;
+    labGL.scene = scene;
+    if (process.env.NODE_ENV !== "production") {
+      // dev only: one frame at the exact carriage pose, the crate's ID box and its analytic box, for the e2e cross-check
+      (window as unknown as { __labCapture?: () => Promise<unknown> }).__labCapture = async () => {
+        const { frames } = await runLabCapture({ preset: "turbidity", name: "probe", seed: 1, count: 1 }, () => {});
+        const f = frames[0];
+        const annotation = f.frame.annotations.find((a) => a.object_id === "debris-crate");
+        return annotation ? { annotation, analytic: f.analytic["debris-crate"] } : null;
+      };
+    }
+    return () => {
+      labGL.gl = null;
+      labGL.scene = null;
+    };
+  }, [gl, scene]);
+  return null;
+}
+
 /** Dev only: lets browser tests drive the store and read draw call counts. */
 function DevHooks() {
   const scene = useThree((s) => s.scene);
@@ -214,6 +239,7 @@ export function LabScene() {
       <Overlays />
       <Callouts />
       <FeedRenderer />
+      <LabCaptureBridge />
       <DevHooks />
     </Canvas>
   );
