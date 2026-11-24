@@ -43,6 +43,8 @@ interface SimStore extends SimSnapshot {
   scene: SceneId;
   cameraPreset: CameraPreset;
   highlight: ComponentId | null;
+  /** the component the user clicked to keep highlighted; hovering elsewhere shows another, leaving returns to this one */
+  pinnedHighlight: ComponentId | null;
   selectedObjectId: string | null;
   demo: DemoState;
   /** set by the UI when the user wants to see the "simulation to field" closing moment */
@@ -58,6 +60,10 @@ interface SimStore extends SimSnapshot {
   setScene: (scene: SceneId) => void;
   setCameraPreset: (p: CameraPreset) => void;
   setHighlight: (id: ComponentId | null) => void;
+  /** click: pin this component's highlight (or unpin with null) */
+  pinHighlight: (id: ComponentId | null) => void;
+  /** pointer or focus left a hover target: back to the pinned component, or none */
+  releaseHighlight: () => void;
   selectObject: (id: string | null) => void;
   moveGantryTo: (x: number, y: number) => void;
   trackObject: (id: string) => void;
@@ -102,6 +108,7 @@ export const useSimStore = create<SimStore>((set, get) => {
     scene: 1,
     cameraPreset: "A",
     highlight: null,
+    pinnedHighlight: null,
     selectedObjectId: null,
     demo: { active: false, paused: false, t: 0, phase: 0, run: 0 },
     showVision: false,
@@ -110,9 +117,11 @@ export const useSimStore = create<SimStore>((set, get) => {
     viewEpoch: 0,
 
     publish,
-    setScene: (scene) => set({ scene, cameraPreset: SCENE_CAMERA[scene], highlight: null }),
+    setScene: (scene) => set({ scene, cameraPreset: SCENE_CAMERA[scene], highlight: null, pinnedHighlight: null }),
     setCameraPreset: (cameraPreset) => set({ cameraPreset }),
     setHighlight: (highlight) => set({ highlight }),
+    pinHighlight: (pinnedHighlight) => set({ pinnedHighlight, highlight: pinnedHighlight }),
+    releaseHighlight: () => set({ highlight: get().pinnedHighlight }),
     selectObject: (selectedObjectId) => set({ selectedObjectId }),
     moveGantryTo: (x, y) => {
       engine.moveTo(x, y);
@@ -151,7 +160,7 @@ export const useSimStore = create<SimStore>((set, get) => {
       const environment = engine.scenario.environment;
       engine.reset();
       if (environment !== engine.scenario.environment) engine.setScenario({ environment });
-      set({ selectedObjectId: null, highlight: null, showVision: false, demo: { active: false, paused: false, t: 0, phase: 0, run: get().demo.run } });
+      set({ selectedObjectId: null, highlight: null, pinnedHighlight: null, showVision: false, demo: { active: false, paused: false, t: 0, phase: 0, run: get().demo.run } });
       publish();
     },
     setScenario: (patch) => {

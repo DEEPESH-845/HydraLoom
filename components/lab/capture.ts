@@ -31,8 +31,9 @@ import { waterUniforms } from "./water";
 /*
  * Synthetic dataset capture for the Gantry Lab: frames from the gantry camera through the same water as the live feed
  * (labWater + labFeedPass, the functions the render loop uses), labelled from an instance-ID pass of the same camera
- * (components/capture/core.ts). The engine is never moved: the capture camera is placed at each viewpoint directly,
- * and the scenario's turbidity and lighting are restored after a sweep.
+ * (components/capture/core.ts). The engine is never touched: the capture camera is placed at each viewpoint directly,
+ * and a sweep's turbidity and lighting go straight to the water uniforms, never into the live scenario (which used to
+ * make the sliders jump and the live detector see the sweep).
  */
 
 export type LabCapturePreset = "jitter" | "raster" | "turbidity" | "lighting";
@@ -105,6 +106,7 @@ export async function runLabCapture(o: LabCaptureOptions, onProgress: (p: Captur
   const engine = store.engine;
   const sc = engine.scenario;
   const original = { turbidity: sc.turbidity, lighting: sc.lighting };
+  const environment = sc.environment;
   const pose = { x: engine.gantry.x.pos, y: engine.gantry.y.pos };
   const views = labViewpoints(o, { ...pose, ...original });
   const { width: W, height: H } = LAB_CAPTURE_SIZE;
@@ -118,7 +120,7 @@ export async function runLabCapture(o: LabCaptureOptions, onProgress: (p: Captur
       if (signal?.aborted) throw new DOMException("Capture cancelled", "AbortError");
       await nextFrame();
       const v = views[i];
-      engine.setScenario({ turbidity: v.turbidity, lighting: v.lighting });
+      const conditions = { turbidity: v.turbidity, lighting: v.lighting };
       const saved = saveState(gl, scene, [overviewFill]);
       try {
         const [wx, wz] = gantryToWorld(v.x, v.y);
@@ -129,8 +131,8 @@ export async function runLabCapture(o: LabCaptureOptions, onProgress: (p: Captur
         ctx.cam.up.set(0, 0, -1);
         ctx.cam.lookAt(wx, 0, wz);
         ctx.cam.updateMatrixWorld();
-        labWater(wx, wz);
-        labFeedPass();
+        labWater(wx, wz, conditions);
+        labFeedPass(conditions);
         waterUniforms.uWaterViewportH.value = H;
         scene.background = feedBackground;
         const pixels = renderRgb(gl, scene, ctx);
@@ -153,7 +155,7 @@ export async function runLabCapture(o: LabCaptureOptions, onProgress: (p: Captur
             return ob ? projectedBox(declaredCorners(ob), project, W, H) : null;
           },
         );
-        const env = ENVIRONMENTS[engine.scenario.environment];
+        const env = ENVIRONMENTS[environment];
         const file = `${String(i + 1).padStart(6, "0")}.png`;
         const q = ctx.cam.quaternion;
         const frame = {
@@ -187,7 +189,6 @@ export async function runLabCapture(o: LabCaptureOptions, onProgress: (p: Captur
       onProgress({ done: i + 1, total: views.length });
     }
   } finally {
-    engine.setScenario(original);
     ctx.dispose();
   }
   const manifest: Manifest = {

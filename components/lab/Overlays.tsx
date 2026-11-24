@@ -258,6 +258,7 @@ const overlaps = (a: Rect, b: Rect, m: number) => a.x0 - m < b.x1 && a.x1 + m > 
 function Callout({ id, n, text, register }: { id: ComponentId; n: string; text: string; register: (id: ComponentId, el: HTMLDivElement | null) => void }) {
   const active = useSimStore((s) => s.highlight === id);
   const setHighlight = useSimStore((s) => s.setHighlight);
+  const releaseHighlight = useSimStore((s) => s.releaseHighlight);
   const line = active ? AMBER : "#4a6075";
   return (
     <Html zIndexRange={[0, 0]} style={{ pointerEvents: "none" }}>
@@ -268,7 +269,7 @@ function Callout({ id, n, text, register }: { id: ComponentId; n: string; text: 
         </svg>
         <div
           onPointerEnter={() => setHighlight(id)}
-          onPointerLeave={() => setHighlight(null)}
+          onPointerLeave={releaseHighlight}
           className="panel label"
           style={{
             position: "absolute",

@@ -20,8 +20,8 @@ const OVERLAY_LAYER = 2;
  */
 const WHITE_AT_FULL_LIGHT = 0.9;
 
-/** Live draw call count of the last frame (main pass + feed pass), for profiling. */
-export const renderStats = { calls: 0, triangles: 0 };
+/** Live draw call count of the last frame (main pass + feed pass), and GPU resources held, for profiling. */
+export const renderStats = { calls: 0, triangles: 0, geometries: 0, textures: 0, programs: 0 };
 
 /**
  * Takes over the render loop: main pass to the full canvas, then the gantry camera
@@ -51,8 +51,16 @@ interface FeedRect {
  * Applies the lab water for the selected in-tank environment to the shared uniforms, with the rig lamps at the
  * carriage (world x, z of the lens). The same call drives the live render loop and the dataset capture.
  */
-export function labWater(wx: number, wz: number): { lamp: boolean } {
-  const { turbidity, lighting, environment } = useSimStore.getState().engine.scenario;
+/** Water and light to render with. The live loop passes the scenario; the dataset capture passes its sweep values. */
+export interface LabConditions {
+  turbidity: number;
+  lighting: number;
+}
+
+export function labWater(wx: number, wz: number, conditions?: LabConditions): { lamp: boolean } {
+  const sc = useSimStore.getState().engine.scenario;
+  const { environment } = sc;
+  const { turbidity, lighting } = conditions ?? sc;
   const env = ENVIRONMENTS[environment];
   const lamp = env.light === "lamp";
   setWater(environmentWater(env, turbidity), {
@@ -73,8 +81,10 @@ export function labWater(wx: number, wz: number): { lamp: boolean } {
  * Switches the uniforms from the main view to the camera feed: true water, only the rig's own light, auto-exposure.
  * Sets `feedBackground` to the veiling light. Returns the main pass exposure so the caller can restore it.
  */
-export function labFeedPass(): number {
-  const { turbidity, environment } = useSimStore.getState().engine.scenario;
+export function labFeedPass(conditions?: LabConditions): number {
+  const sc = useSimStore.getState().engine.scenario;
+  const { environment } = sc;
+  const { turbidity } = conditions ?? sc;
   const env = ENVIRONMENTS[environment];
   const optics = waterOptics(environmentWater(env, turbidity));
   // the camera feed always sees true water and only the rig's own light
@@ -149,6 +159,9 @@ export function FeedRenderer() {
     gl.render(scene, camera);
     renderStats.calls = gl.info.render.calls;
     renderStats.triangles = gl.info.render.triangles;
+    renderStats.geometries = gl.info.memory.geometries;
+    renderStats.textures = gl.info.memory.textures;
+    renderStats.programs = gl.info.programs?.length ?? 0;
 
     // Explore mode hides the panels with visibility, which keeps the feed rect in layout; the feed must go with them.
     if (useSimStore.getState().exploring) return;

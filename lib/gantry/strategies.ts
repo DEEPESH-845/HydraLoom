@@ -173,6 +173,25 @@ class UncertaintyPlanner implements ScanPlanner {
   }
 }
 
+/**
+ * The viewpoints a strategy will visit, known before the scan starts, for display. Detection-driven adds re-centring
+ * visits to its serpentine base as detections arrive; uncertainty-driven plans every step live, so it has none.
+ */
+export function plannedViewpoints(id: StrategyId, waypoints?: readonly (readonly [number, number])[]): (readonly [number, number])[] {
+  switch (id) {
+    case "coverage":
+      return coveragePlan();
+    case "uncertainty":
+      return [];
+    case "waypoints":
+      return (waypoints?.length ? waypoints : TEST.scanWaypoints).map(([x, y]) => [clamp(x, 0, GANTRY.travelX), clamp(y, 0, GANTRY.travelY)] as const);
+    case "serpentine":
+    case "detection-driven":
+    default:
+      return [...TEST.scanWaypoints];
+  }
+}
+
 export function createPlanner(id: StrategyId, waypoints?: readonly (readonly [number, number])[]): ScanPlanner {
   switch (id) {
     case "coverage":

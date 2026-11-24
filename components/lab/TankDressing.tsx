@@ -9,6 +9,7 @@ import { ENVIRONMENTS, type EnvironmentId } from "@/lib/sim/environments";
 import { mulberry32 } from "@/lib/sim/rng";
 import { DEFAULT_OBJECTS } from "@/lib/sim/scenario";
 import { useSimStore } from "@/lib/sim/store";
+import { useDeferredDispose } from "@/components/field/common";
 import { sandSurfaceY } from "./Aquarium";
 import { std } from "./util";
 import { weather } from "./weathering";
@@ -19,6 +20,21 @@ import { weather } from "./weathering";
  * a site would have, scaled to the tank and kept in its margins, clear of the survey area and the test objects.
  * Everything here is procedural.
  */
+
+/* ---------- GPU resource lifetime ---------- */
+
+/**
+ * Frees a dressing's geometries and materials once it leaves the tank for good. Each switch builds a new dressing, so
+ * without this every visit to an environment left its buffers on the GPU. Deferred and StrictMode-safe
+ * (components/field/common.ts useDeferredDispose).
+ */
+function useDisposeAll(resources: Record<string, { dispose(): void }>) {
+  useDeferredDispose(resources, () => {
+    for (const r of Object.values(resources)) r.dispose();
+  });
+}
+
+const NOTHING: Record<string, { dispose(): void }> = {};
 
 /* ---------- tank geometry the dressing must respect ---------- */
 
@@ -195,8 +211,11 @@ function HarborProps() {
       link.translate(x, sandSurfaceY(x, z) + (i % 2 ? 0.002 : 0.0055), z);
       links.push(link.toNonIndexed());
     }
-    return { concrete, rubber, chainMat, piling, tyre, chain: mergeGeometries(links, false) };
+    const chain = mergeGeometries(links, false);
+    for (const l of links) l.dispose();
+    return { concrete, rubber, chainMat, piling, tyre, chain };
   }, []);
+  useDisposeAll(p);
   return (
     <group>
       <mesh geometry={p.piling} material={p.concrete} position={[0.545, 0, -0.245]} castShadow receiveShadow />
@@ -225,6 +244,7 @@ function RiverProps() {
     branch.computeVertexNormals();
     return { concrete, wood, pier, branch };
   }, []);
+  useDisposeAll(p);
   return (
     <group>
       <mesh geometry={p.pier} material={p.concrete} position={[0.545, 0, -0.24]} castShadow receiveShadow />
@@ -238,6 +258,7 @@ function DeepProps() {
     const rock = weather(std({ color: "#4c4640", roughness: 0.95 }), { scale: 60, rust: 0, silt: 0.55, growth: 0, bump: 2.4, seed: 60 });
     return { rock, outcrop: stoneGeometry(63, 4) };
   }, []);
+  useDisposeAll(p);
   return (
     <group>
       <mesh geometry={p.outcrop} material={p.rock} position={[-0.545, 0.004, -0.235]} scale={[0.04, 0.035, 0.045]} rotation={[0, 0.7, 0]} castShadow receiveShadow />
@@ -249,6 +270,8 @@ function DeepProps() {
 /** Everything an environment places in the tank besides the water and the floor material. */
 export function TankDressing({ env }: { env: EnvironmentId }) {
   const scatter = useMemo(() => (env === "tank" ? null : buildScatter(env)), [env]);
+  const scatterResources = useMemo(() => (scatter ? { geometry: scatter.geometry, material: scatter.material as THREE.Material, instances: scatter } : NOTHING), [scatter]);
+  useDisposeAll(scatterResources);
   return (
     <group name={`tank-dressing-${env}`}>
       {scatter && <primitive object={scatter} />}

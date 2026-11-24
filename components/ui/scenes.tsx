@@ -2,14 +2,14 @@
 
 import clsx from "clsx";
 import { Home, Play, RotateCcw, Square } from "lucide-react";
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { GANTRY, TEST } from "@/lib/sim/constants";
+import { GANTRY } from "@/lib/sim/constants";
 import { useSimStore, type ComponentId } from "@/lib/sim/store";
 import { ACTIONS, type Action, type TestResult } from "@/lib/sim/types";
 import { visibilityRange, waterOptics } from "@/lib/optics/water";
 import { ENVIRONMENT_IDS, ENVIRONMENTS, environmentNtu, environmentWater, type Environment, type EnvironmentId } from "@/lib/sim/environments";
-import { STRATEGIES, STRATEGY_IDS, type StrategyId } from "@/lib/gantry/strategies";
+import { STRATEGIES, STRATEGY_IDS, plannedViewpoints, type StrategyId } from "@/lib/gantry/strategies";
 import { compareStrategies, type StrategyRow } from "@/lib/gantry/evaluate";
 import { LabCapturePanel } from "./LabCapturePanel";
 import { Btn, CardHead, Chain, Chip, ObjectChips, clampNum, f1, f2, isTargetClass, pad2, pct, signed, useObjects } from "./shared";
@@ -90,14 +90,13 @@ function siteRow(c: (typeof COMPONENTS)[number], env: Environment): { name: stri
 export function SystemCard() {
   const env = ENVIRONMENTS[useSimStore((s) => s.scenario.environment)];
   const setHighlight = useSimStore((s) => s.setHighlight);
+  const releaseHighlight = useSimStore((s) => s.releaseHighlight);
+  const pinHighlight = useSimStore((s) => s.pinHighlight);
   const highlight = useSimStore((s) => s.highlight);
-  const [sticky, setSticky] = useState<ComponentId | null>(null);
+  // the pin lives in the store, so leaving a 3D callout returns to it as leaving a row does
+  const sticky = useSimStore((s) => s.pinnedHighlight);
   const [mapping, setMapping] = useState(false);
-  const toggle = (id: ComponentId) => {
-    const next = sticky === id ? null : id;
-    setSticky(next);
-    setHighlight(next);
-  };
+  const toggle = (id: ComponentId) => pinHighlight(sticky === id ? null : id);
 
   return (
     <div>
@@ -116,9 +115,9 @@ export function SystemCard() {
               tabIndex={0}
               aria-pressed={sticky === c.id}
               onMouseEnter={() => setHighlight(c.id)}
-              onMouseLeave={() => setHighlight(sticky)}
+              onMouseLeave={releaseHighlight}
               onFocus={() => setHighlight(c.id)}
-              onBlur={() => setHighlight(sticky)}
+              onBlur={releaseHighlight}
               onClick={() => toggle(c.id)}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" && e.key !== " ") return;
@@ -224,6 +223,10 @@ function XYPad() {
   const pos = useSimStore((s) => s.telemetry.gantry);
   const moveGantryTo = useSimStore((s) => s.moveGantryTo);
   const objects = useObjects();
+  const strategy = useSimStore((s) => s.scenario.strategy);
+  const waypoints = useSimStore((s) => s.scenario.waypoints);
+  // the selected strategy's plan, not always the serpentine's six points
+  const plan = useMemo(() => plannedViewpoints(strategy, waypoints), [strategy, waypoints]);
   const g = useSimStore.getState().engine.gantry;
   const px = (x: number) => (x / GANTRY.travelX) * 100;
   const py = (y: number) => (y / GANTRY.travelY) * 100;
@@ -272,8 +275,8 @@ function XYPad() {
       aria-label="Gantry XY pad: click or drag to move the carriage, arrow keys jog 5 cm, Shift and arrow 1 cm"
       title="Click to move the gantry"
     >
-      {TEST.scanWaypoints.map(([x, y]) => (
-        <span key={`${x}-${y}`} className="absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-dim" style={{ left: `${px(x)}%`, top: `${py(y)}%` }} />
+      {plan.map(([x, y], i) => (
+        <span key={`${i}-${x}-${y}`} data-waypoint className="absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-dim" style={{ left: `${px(x)}%`, top: `${py(y)}%` }} />
       ))}
       {objects.map((o) => (
         <span
@@ -299,8 +302,9 @@ export function GantryCard() {
   const t = useSimStore(
     useShallow((s) => ({ x: s.telemetry.gantry.x, y: s.telemetry.gantry.y, moving: s.telemetry.gantry.moving, mode: s.mode, phase: s.phase })),
   );
-  // rl.targetId outlives the episode, so while tracking by hand the selected object wins.
-  const targetId = useSimStore((s) => (s.mode === "TRACK" ? s.selectedObjectId : (s.rl.targetId ?? s.selectedObjectId)));
+  // rl.targetId outlives the episode, so while tracking by hand the selected object wins, and a manual move has no
+  // target at all (it used to keep showing the last episode's object).
+  const targetId = useSimStore((s) => (s.mode === "MANUAL" ? null : s.mode === "TRACK" ? s.selectedObjectId : (s.rl.targetId ?? s.selectedObjectId)));
   const targetLabel = useSimStore((s) => s.scenario.objects.find((o) => o.id === targetId)?.label ?? null);
   const { moveGantryTo, runTest, stop, trackObject } = useSimStore(
     useShallow((s) => ({ moveGantryTo: s.moveGantryTo, runTest: s.runTest, stop: s.stop, trackObject: s.trackObject })),
@@ -744,11 +748,18 @@ export function ResultCard() {
   const events = useSimStore((s) => s.events);
   const { runTest, replayTest, setShowVision, setScene } = useSimStore(useShallow((s) => ({ runTest: s.runTest, replayTest: s.replayTest, setShowVision: s.setShowVision, setScene: s.setScene })));
   const [showLog, setShowLog] = useState(false);
+  const testing = useSimStore((s) => s.mode === "TEST");
 
   if (!result) {
+    // a scan clears the shown result until it completes, and a stopped scan has none: say which, never "no test yet"
+    const note = testing
+      ? "A test is running. Its result appears here when it completes."
+      : previous
+        ? "The last test was stopped before it completed, so it has no result. Run it again."
+        : "No test has run yet.";
     return (
       <div>
-        <CardHead title="Test result" note="No test has run yet." />
+        <CardHead title="Test result" note={note} />
         <Btn
           primary
           onClick={() => {

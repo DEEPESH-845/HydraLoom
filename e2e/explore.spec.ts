@@ -126,6 +126,40 @@ test.describe("free exploration", () => {
     expect(d1).toBeLessThan(d0 * 0.95); // the zoom in held, the glide did not pull back out
   });
 
+  test("a pan made while the explore glide runs, or one that opens explore, moves the pivot and stays", async ({ lab, page }) => {
+    // regression: the glide re-centred the pivot every frame until it converged, so a pan was pulled straight back
+    await lab.open();
+    await lab.settleCamera();
+    const rightDrag = async (dx: number) => {
+      await page.mouse.move(700, 400);
+      await page.mouse.down({ button: "right" });
+      for (let i = 1; i <= 12; i++) await page.mouse.move(700 + (dx * i) / 12, 400);
+      await page.mouse.up({ button: "right" });
+    };
+    // orbit opens explore and starts the glide; pan at once, before it converges
+    await page.mouse.move(400, 300);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(400 + 15 * i, 300);
+    await page.mouse.up();
+    expect(await lab.state((s) => s.exploring)).toBe(true);
+    const before = await pose(page);
+    await rightDrag(220);
+    await lab.settleCamera();
+    const after = await pose(page);
+    expect(Math.hypot(after.t.x - before.t.x, after.t.y - before.t.y, after.t.z - before.t.z)).toBeGreaterThan(0.05);
+
+    // a pan as the very first gesture opens explore and keeps its pivot
+    await page.keyboard.press("Escape");
+    await lab.waitFor((s) => !s.exploring);
+    await lab.settleCamera();
+    const home = await pose(page);
+    await rightDrag(-220);
+    expect(await lab.state((s) => s.exploring)).toBe(true);
+    await lab.settleCamera();
+    const panned = await pose(page);
+    expect(Math.hypot(panned.t.x - home.t.x, panned.t.y - home.t.y, panned.t.z - home.t.z)).toBeGreaterThan(0.05);
+  });
+
   test("double-click a part under the water makes it the orbit target", async ({ lab, page }) => {
     await lab.open();
     await page.waitForFunction(() => window.__labCamera && !window.__labCamera.tweening());
