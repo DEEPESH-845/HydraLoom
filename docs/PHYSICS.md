@@ -133,20 +133,28 @@ This is not a neural network.
 It estimates whether a reasonable detector could see an object from the current pose through the current water.
 Real model evaluation uses rendered frames and the backend (`docs/ARCHITECTURE.md` section 5).
 
-`confidence = detectability * geometry * water * light * size * blur * (1 - occluded)^1.5 +- 0.01 seeded jitter`
+`confidence = detectability * geometry * evidence * size * blur * (1 - occluded)^1.5 +- 0.01 seeded jitter`
 
 - geometry: `1 - 0.30 r^2 - 0.15 burial`, the lab's term.
-- water: `waterDetectability(contrastRatio(...))` with the lab's optics (`lib/optics/water.ts`): per-channel attenuation `c` over the lens-to-object path and veiling light from `rInf`, with the environment's seabed as the background.
+- evidence: the mean of `water * light` over the best-seen 35 percent of the surface patches that face the camera, each with its own path; patches out of frame count as zero.
+  In murky water the only readable views are close ones, where a 5 m wreck can never show 35 percent of itself, so the evidence is the larger of that and `0.95 *` the readable share of the picture over 30 percent (ray grid against the target's exposed box).
+  Until 2026-11-25 the whole box had to be in front of the lens with 30 percent of it in frame, and the path was measured to the box centre: a wreck was rejected at every range at which 2 m visibility could show it.
+- water: `contrastSignal(contrastRatio(...))` with the lab's optics (`lib/optics/water.ts`): per-channel attenuation `c` over the lens-to-patch path and veiling light from `rInf`, with the environment's seabed as the background.
+  Linear in log contrast from 0 at 2 percent (Koschmieder) to 1 at 20 percent; the 20 percent saturation is an assumption to calibrate against a real model.
   Daylight paths: object lit at its depth, veil lit at the path midpoint; lamp paths: object lit over the viewing distance, veil half way.
   Stratified layers add their particles over the part of the path inside the layer.
 - light: shot-noise-limited signal, the square root of daylight at the object's depth (`exp(-Kd z)`, normalised to 5 percent of surface irradiance) plus lamp irradiance `power exp(-Kd d) (d_ref / d)^2`, with `d_ref = 2.5 m * sqrt(lumens / 6000)`.
   Lamp light and the veil it causes are not separated in this term; contrast is computed from the daylight model, which overestimates contrast for lamp light in turbid surface water.
 - size: smoothstep of the projected size from 6 to 28 px.
 - blur: `1 / (1 + (b / 8)^2)` with `b = exposure * f * (lateral speed / distance + turn rate)` in pixels.
-- occlusion: five rays (centre and top corners) against the terrain and solid structures.
+- occlusion: up to five of the patches used, traced to the lens against the terrain and solid structures.
 - Class: true class at or above 0.65 (with 0.03 hysteresis), else a deterministic confusion (TIRE and PIPELINE read as DEBRIS, others as UNKNOWN).
 
-Tested invariants: confidence never rises with turbidity at a fixed pose; lamp light falls with distance and is zero with the lamps off; the on-axis point projects to the image centre for any attitude.
+The survey altitude and the stand-off come from `workingRange`: the longest range at which 85 percent of that same signal survives, projected through the camera tilt and measured from the target's near surface.
+Confidence is a track: each 10 Hz reading enters with weight 0.5, and a track below the threshold coasts for up to 0.6 s while its object is still in the picture, keeping its label.
+A mission holds for 2 s at its last viewpoint before it completes, and finds made while piloting by hand are recorded (`engine.finds()`).
+
+Tested invariants: the ROV detection mission classifies the wreck in every environment; every target can reach its true class in ideal conditions; nothing is found at maximum harbor turbidity; confidence never rises with turbidity at a fixed pose; lamp light falls with distance and is zero with the lamps off; the on-axis point projects to the image centre for any attitude.
 
 ## 8. Fidelity levels and open assumptions
 

@@ -185,7 +185,7 @@ test.describe("Model Lab", () => {
     await page.goto("/models");
     const down = page.getByTestId("backend-down");
     await expect(down).toBeVisible();
-    await expect(down.locator("pre")).toHaveText("cd backend\n.venv/Scripts/python -m uvicorn gantrylab.app:app --port 8000");
+    await expect(down.locator("pre")).toHaveText(/cd backend\s\.venv\/(bin|Scripts)\/python -m uvicorn gantrylab\.app:app --port 8000/);
     await page.goto(`/reports/${MOCK_RUN}`);
     await expect(page.getByTestId("backend-down")).toBeVisible();
   });

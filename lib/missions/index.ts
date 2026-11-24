@@ -5,6 +5,7 @@ import { lawnmower, type Waypoint } from "../physics/autopilot";
 import type { EnvironmentDefinition, TargetSpec } from "../world/schema";
 import { terrainHeight } from "../world/terrain";
 import type { PlatformId } from "../platforms";
+import { approachExtent } from "../field/detection";
 
 export type MissionId =
   | "detection"
@@ -49,6 +50,8 @@ export interface RouteContext {
   altitudeM: number;
   /** camera swath width at that altitude, m */
   swathM: number;
+  /** cruise speed, m/s */
+  speedMps: number;
 }
 
 const bed = (env: EnvironmentDefinition) => (x: number, z: number) => terrainHeight(env.geometry.terrain, x, z);
@@ -87,11 +90,71 @@ function tour(env: EnvironmentDefinition, start: [number, number, number], altit
     const dx = t.x - cur[0];
     const dz = t.z - cur[2];
     const L = Math.hypot(dx, dz) || 1;
-    const x = t.x - (dx / L) * standoff;
-    const z = t.z - (dz / L) * standoff;
+    // the stand-off is from the near surface: a 5 m wreck measured from its centre would be parked inside
+    const off = approachExtent(t, dx / L, dz / L) + standoff;
+    const x = t.x - (dx / L) * off;
+    const z = t.z - (dz / L) * off;
     const heading = ((Math.atan2(dx, -dz) * 180) / Math.PI + 360) % 360;
     out.push({ x, z, y: 0, altitude, headingDeg: heading });
     cur = [x, 0, z];
+  }
+  return out;
+}
+
+/** Minutes an open exploration may take: it samples the site; coverage mapping is the mission that fills it. */
+const EXPLORE_MINUTES = 12;
+function exploreSpacing(area: { x0: number; z0: number; x1: number; z1: number }, swath: number, speed: number): number {
+  const along = Math.max(area.x1 - area.x0, area.z1 - area.z0);
+  const across = Math.min(area.x1 - area.x0, area.z1 - area.z0);
+  const legs = Math.max(2, Math.floor((speed * EXPLORE_MINUTES * 60 - across) / along));
+  return Math.max(swath, across / (legs - 1) - 1e-6);
+}
+
+/** Straight water an AUV gets before a target to settle on the line, m. */
+const RUN_IN_M = 18;
+
+/**
+ * Straight passes over every target, nearest first: a run-in long enough for an AUV to settle on the line, then out the
+ * other side. It cannot hover, so a pass is its inspection.
+ */
+function overflights(env: EnvironmentDefinition, start: [number, number, number], altitude: number, margin: number): Waypoint[] {
+  const [ex, ez] = env.geometry.extentM;
+  const cx = (v: number) => Math.max(-ex / 2 + margin, Math.min(ex / 2 - margin, v));
+  const cz = (v: number) => Math.max(-ez / 2 + margin, Math.min(ez / 2 - margin, v));
+  const left = [...env.targets];
+  const out: Waypoint[] = [];
+  let cur: [number, number] = [start[0], start[2]];
+  let heading: [number, number] = [1, 0];
+  const turn = (a: [number, number], b: [number, number]) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1])));
+  while (left.length) {
+    left.sort((a, b) => Math.hypot(a.x - cur[0], a.z - cur[1]) - Math.hypot(b.x - cur[0], b.z - cur[1]));
+    const t = left.shift()!;
+    // the pass direction that leaves the longest straight run-in with the least turning; along a long object if it is one
+    const r = (t.yawDeg * Math.PI) / 180;
+    const long = t.halfExtents[0] > 3 * t.halfExtents[2];
+    let best = { cost: Infinity, dir: [1, 0] as [number, number], inX: 0, inZ: 0, outX: 0, outZ: 0 };
+    for (let k = 0; k < 24; k++) {
+      const dir: [number, number] = [Math.cos((k / 24) * 2 * Math.PI), Math.sin((k / 24) * 2 * Math.PI)];
+      const inX = cx(t.x - dir[0] * RUN_IN_M);
+      const inZ = cz(t.z - dir[1] * RUN_IN_M);
+      const outX = cx(t.x + dir[0] * 6);
+      const outZ = cz(t.z + dir[1] * 6);
+      const leg: [number, number] = [inX - cur[0], inZ - cur[1]];
+      const legL = Math.hypot(leg[0], leg[1]);
+      const to: [number, number] = legL > 1e-6 ? [leg[0] / legL, leg[1] / legL] : heading;
+      // clamping to the site bends the line off the target: that is the run-in lost
+      const miss = Math.abs((t.x - inX) * -dir[1] + (t.z - inZ) * dir[0]);
+      const run = Math.hypot(t.x - inX, t.z - inZ);
+      const across = long ? 4 * Math.abs(dir[0] * Math.sin(r) + dir[1] * Math.cos(r)) : 0;
+      const cost = legL * 0.25 + 5 * turn(heading, to) + 7 * turn(to, dir) + 3 * Math.max(0, RUN_IN_M - run) + 6 * miss + across + (legL < 8 ? 6 : 0);
+      if (cost < best.cost) best = { cost, dir, inX, inZ, outX, outZ };
+    }
+    // the line always goes through the target itself
+    const L = Math.hypot(t.x - best.inX, t.z - best.inZ) || 1;
+    const d: [number, number] = [(t.x - best.inX) / L, (t.z - best.inZ) / L];
+    out.push({ x: best.inX, z: best.inZ, y: 0, altitude }, { x: cx(t.x + d[0] * 6), z: cz(t.z + d[1] * 6), y: 0, altitude });
+    cur = [cx(t.x + d[0] * 6), cz(t.z + d[1] * 6)];
+    heading = d;
   }
   return out;
 }
@@ -101,7 +164,7 @@ export function missionRoute(id: MissionId, ctx: RouteContext): Waypoint[] {
   const { env, platform, start, altitudeM, swathM } = ctx;
   if (platform === "station" || platform === "gantry") return [];
   const [ex, ez] = env.geometry.extentM;
-  const margin = platform === "auv" ? 8 : 2;
+  const margin = platform === "auv" ? Math.min(9, 0.22 * Math.min(ex, ez)) : 2;
   // surveys cover at most an 80 x 80 m box in the middle of the site, so a mission stays minutes, not hours
   const hx = Math.min(ex / 2 - margin, 40);
   const hz = Math.min(ez / 2 - margin, 40);
@@ -110,7 +173,7 @@ export function missionRoute(id: MissionId, ctx: RouteContext): Waypoint[] {
   switch (id) {
     case "coverage-mapping":
     case "seabed-exploration":
-      return lawnmower(area, swathM, id === "coverage-mapping" ? 0.2 : 0, 0, altitudeM);
+      return id === "coverage-mapping" ? lawnmower(area, swathM, 0.2, 0, altitudeM) : lawnmower(area, exploreSpacing(area, swathM, ctx.speedMps), 0, 0, altitudeM);
     case "structure-inspection": {
       // orbit the nearest solid asset (piling or pier) at 2 m stand-off, 8 points, facing it
       const solids: { x: number; z: number; r: number }[] = [];
@@ -164,6 +227,6 @@ export function missionRoute(id: MissionId, ctx: RouteContext): Waypoint[] {
     case "localization":
     default:
       // the stand-off follows the survey altitude, which the field engine sizes from the water's visibility
-      return isAuv ? lawnmower(area, swathM, 0.1, 0, altitudeM) : tour(env, start, altitudeM, Math.min(2.5, Math.max(0.8, altitudeM * (id === "classification" ? 0.7 : 1))));
+      return isAuv ? overflights(env, start, altitudeM, margin) : tour(env, start, altitudeM, Math.min(2.5, Math.max(0.8, altitudeM * (id === "classification" ? 0.7 : 1))));
   }
 }

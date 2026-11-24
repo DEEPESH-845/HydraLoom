@@ -1,6 +1,7 @@
 "use client";
 
 import * as THREE from "three";
+import { CONDITION_GRID } from "@/lib/bench/profile";
 import { focalPx, project, type CameraPose } from "@/lib/field/camera";
 import type { FieldEngine } from "@/lib/field/engine";
 import { cross, len, qRotate, type Vec3 } from "@/lib/physics/math";
@@ -32,7 +33,7 @@ import { passControl, targetSync } from "./runtime";
 export const GENERATOR = { app: "gantrylab-web", version: "0.2.0", renderer: `three r${THREE.REVISION}` };
 export const MIN_VISIBLE_PX = 12;
 
-export type CapturePreset = "jitter" | "mission" | "turbidity" | "lighting";
+export type CapturePreset = "jitter" | "mission" | "turbidity" | "lighting" | "grid";
 
 export interface CaptureOptions {
   preset: CapturePreset;
@@ -502,7 +503,7 @@ export async function runCapture(
   const rand = mulberry32(opts.seed >>> 0);
   const restore = { turbidity: engine.conditions.turbidity, lighting: engine.conditions.lighting, paused: engine.paused };
   const steps = [0, 0.25, 0.5, 0.75, 1];
-  const total = opts.preset === "turbidity" || opts.preset === "lighting" ? steps.length : Math.max(1, Math.min(500, Math.round(opts.frames)));
+  const total = opts.preset === "grid" ? CONDITION_GRID.length * Math.max(1, Math.min(20, Math.round(opts.frames))) : opts.preset === "turbidity" || opts.preset === "lighting" ? steps.length : Math.max(1, Math.min(500, Math.round(opts.frames)));
   const frames: CapturedFrame[] = [];
   engine.paused = true;
   try {
@@ -515,6 +516,10 @@ export async function runCapture(
       else if (opts.preset === "mission") {
         if (i > 0) engine.advance(Math.max(0.1, opts.everyS));
         pose = engine.cameraPose(false);
+      } else if (opts.preset === "grid") {
+        const [turbidity, lighting] = CONDITION_GRID[i % CONDITION_GRID.length];
+        engine.setConditions({ turbidity, lighting });
+        pose = i < CONDITION_GRID.length ? base : jitterPose(base, rand);
       } else {
         const v = opts.preset === "turbidity" ? steps[i] : 0.1 + 0.9 * steps[i];
         engine.setConditions(opts.preset === "turbidity" ? { turbidity: v } : { lighting: v });

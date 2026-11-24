@@ -301,3 +301,114 @@ for (const vp of [
     await page.screenshot({ path: `e2e/.results/field/responsive-${vp.width}x${vp.height}.png` });
   });
 }
+
+test("flying by hand to the wreck finds a SHIPWRECK in every environment", async ({ page, field }) => {
+  test.setTimeout(600_000);
+  await field.open("harbor", "rov");
+  await field.workspace("05").click();
+  for (const env of ["harbor", "river", "deepsea", "reef", "lake", "ocean"] as const) {
+    if (env !== "harbor") {
+      await page.evaluate((e) => window.__fieldStore!.getState().selectEnvironment(e), env);
+      await field.waitWorld(env);
+    }
+    // something else may already be in view; the wreck must not be
+    expect(await field.state((s) => s.finds.some((f) => f.trueClass === "SHIPWRECK")), env).toBe(false);
+    // start 4 m off the hull at survey altitude, looking at it, then drive forward on the stick like a pilot
+    await page.evaluate(() => {
+      const s = window.__fieldStore!.getState();
+      const e = s.engine;
+      const w = e.targets.find((t) => t.class === "SHIPWRECK")!;
+      // broadside, from the side nearer the middle of the site (the other may be a river bank)
+      const d = w.halfExtents[2] + 4;
+      const sides = [Math.PI / 2, -Math.PI / 2].map((k) => k - (w.yawDeg * Math.PI) / 180);
+      const at = (k: number) => [w.position[0] - Math.cos(k) * d, w.position[2] - Math.sin(k) * d];
+      const a = sides.sort((p, q) => Math.hypot(...at(p)) - Math.hypot(...at(q)))[0];
+      const [x, z] = at(a);
+      // at deck height: the ground it starts over may be higher than the wreck's bed (the river bank)
+      const deck = w.position[1] + w.halfExtents[1] * (1 - w.burial);
+      e.vehicle!.position = [x, Math.max(deck - 0.1, e.floor(x, z) + 0.45), z];
+      const yaw = Math.atan2(-Math.sin(a), Math.cos(a));
+      e.vehicle!.attitude = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+      e.vehicle!.velocity = [0, 0, 0];
+      // no current: an unattended stick would be swept off the approach, which is correct but not what is tested here
+      s.setConditions({ current: { speedMps: 0 } });
+      s.setPilotMode("MANUAL");
+      s.setStick({ surge: 0.2 });
+    });
+    for (let i = 0; i < 24 && !(await field.state((s) => s.finds.some((f) => f.class === "SHIPWRECK"))); i++) await field.fastForward(0.5);
+    await expect(page.getByTestId("finds"), env).toContainText("SHIPWRECK");
+    await expect(page.getByTestId("events"), env).toContainText("SHIPWRECK");
+    if (env === "reef") await page.screenshot({ path: "e2e/.results/workbench/field-wreck.png" });
+  }
+});
+
+test("roaming with the keyboard stays in the site, the chase camera too, and boxes stay on their objects", async ({ page, field }) => {
+  test.setTimeout(400_000);
+  await field.open("reef", "rov");
+  await page.evaluate(() => {
+    const s = window.__fieldStore!.getState();
+    s.setView("follow");
+    s.setTimeScale(8);
+  });
+  const inside = () =>
+    page.evaluate(() => {
+      const e = window.__fieldStore!.getState().engine;
+      const b = e.bounds();
+      const p = e.vehicle!.position;
+      const c = (window as unknown as { __fieldCamera: { camera: { position: { x: number; y: number; z: number } } } }).__fieldCamera.camera.position;
+      const [ex, ez] = e.env.geometry.extentM;
+      return { vehicle: p[0] >= b.x0 && p[0] <= b.x1 && p[2] >= b.z0 && p[2] <= b.z1 && p[1] < 0, camera: Math.abs(c.x) <= ex / 2 + 0.01 && Math.abs(c.z) <= ez / 2 + 0.01 && c.y < 0 && c.y > e.floor(c.x, c.z) };
+    });
+  // the first frames still show the overview
+  await expect.poll(async () => (await inside()).camera).toBe(true);
+  for (const key of ["w", "q", "s", "e"]) {
+    await page.keyboard.down(key);
+    for (let i = 0; i < 6; i++) {
+      await page.waitForTimeout(500);
+      expect(await inside(), key).toEqual({ vehicle: true, camera: true });
+    }
+    await page.keyboard.up(key);
+  }
+  // hover over the wreck, moving: each drawn box is where the engine projects its object this very frame
+  await page.evaluate(() => {
+    const s = window.__fieldStore!.getState();
+    s.setTimeScale(1);
+    const e = s.engine;
+    const w = e.targets.find((t) => t.class === "SHIPWRECK")!;
+    e.vehicle!.position = [w.position[0] - 5, w.position[1] + 2, w.position[2]];
+    e.vehicle!.attitude = [0, 0, 0, 1];
+    e.vehicle!.velocity = [0, 0, 0];
+    s.setConditions({ current: { speedMps: 0 } });
+    s.setPilotMode("MANUAL");
+    s.setStick({ sway: 0.3 });
+  });
+  await field.waitFor((s) => s.detections.some((d) => d.class === "SHIPWRECK"));
+  await expect(page.getByTestId("detection-strip")).toContainText("SHIPWRECK");
+  await page.screenshot({ path: "e2e/.results/workbench/field-follow.png" });
+  const gap = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        let worst = 0;
+        let n = 0;
+        const tick = () => {
+          const id = window.__fieldStore!.getState().engine.targets.find((t) => t.class === "SHIPWRECK")!.id;
+          const el = document.querySelector<HTMLElement>(`[data-testid=feed-boxes] [data-target="${id}"]`);
+          const d = window.__fieldStore!.getState().detections.find((q) => q.targetId === id);
+          // the drawn box against the detector's last one: at 0.3 m/s they may differ by the motion of one reading at most
+          if (el && d) worst = Math.max(worst, Math.abs(parseFloat(el.style.left) / 100 - d.bbox[0]));
+          if (++n < 60) requestAnimationFrame(tick);
+          else resolve(worst);
+        };
+        tick();
+      }),
+  );
+  expect(gap).toBeLessThan(0.12);
+  // explore mode hides the panels but not what is being detected
+  await page.keyboard.press("h");
+  await expect(page.getByTestId("detection-strip")).toContainText("SHIPWRECK");
+  await expect(page.getByTestId("feed-boxes").locator("[data-target]").first()).toBeHidden();
+  await page.keyboard.press("h");
+  await page.evaluate(() => window.__fieldStore!.getState().setView("pilot"));
+  await expect(page.getByTestId("pilot-boxes").locator("[data-target]").first()).toBeVisible();
+  await page.screenshot({ path: "e2e/.results/workbench/field-pilot.png" });
+});

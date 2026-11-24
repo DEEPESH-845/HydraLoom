@@ -21,6 +21,8 @@ export interface FieldSnapshot {
   conditions: FieldConditions;
   telemetry: FieldTelemetry;
   detections: FieldDetection[];
+  /** best detection of every target found so far, by a mission or by hand */
+  finds: FieldDetection[];
   events: FieldEvent[];
   phase: MissionPhase;
   result: MissionResult | null;
@@ -77,6 +79,7 @@ function snapshot(e: FieldEngine): FieldSnapshot {
     conditions: { ...e.conditions, current: { ...e.conditions.current } },
     telemetry: e.telemetry(),
     detections: e.detections,
+    finds: e.finds(),
     events: e.events,
     phase: e.phase,
     result: e.result,

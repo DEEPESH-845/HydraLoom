@@ -226,6 +226,7 @@ function TelemetryGrid() {
           <Row k="Reynolds number (hull)" v={t.reynolds > 0 ? t.reynolds.toExponential(2) : "0"} />
           {vehicle && <Row k="Pilot" v={`${t.pilot.mode}${t.pilot.waypoints ? ` ${Math.min(t.pilot.waypoint, t.pilot.waypoints)}/${t.pilot.waypoints}` : ""}`} />}
           {t.contact && <Row k="Contact" v="hull touching" tone="danger" />}
+          {t.guarded && !t.contact && <Row k="Guard" v="holding off an edge or obstacle" tone="amber" />}
         </div>
         <div>
           <div className="label mb-1 text-[9px] text-dim">Water at the vehicle</div>

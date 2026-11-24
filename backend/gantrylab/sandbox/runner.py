@@ -6,7 +6,7 @@ It starts ``python -I`` running :mod:`gantrylab.sandbox.worker` with:
 * a scrubbed environment (no API keys, tokens or secrets),
 * an empty temporary working directory and private TEMP / HOME / config dirs,
 * a wall-clock timeout,
-* a memory limit (Windows Job Object; POSIX ``RLIMIT_AS`` for CPU jobs) plus a psutil RSS watchdog,
+* a memory limit (Windows Job Object; ``RLIMIT_AS`` for CPU jobs on Linux) plus a psutil RSS watchdog,
 * on Windows, an active-process limit that prevents the worker from spawning children,
 * a line-oriented JSON protocol on stdout (lines prefixed with ``@@GL@@``).
 """
@@ -301,8 +301,11 @@ def run_sandboxed(
         creationflags = 0x00000004 | 0x08000000  # CREATE_SUSPENDED | CREATE_NO_WINDOW
     else:
         cpu_only = str(job.get("config", {}).get("device", "cpu")) == "cpu"
-        preexec = _posix_preexec(limits.memory_mb, limit_address_space=cpu_only)
-        limit_info["mechanism"] = "rlimit_as+rss_watchdog" if cpu_only else "rss_watchdog"
+        # macOS refuses an RLIMIT_AS below the address space the process has already reserved (gigabytes of it are
+        # never touched), which aborted every spawn there: the RSS watchdog is the memory limit on that platform.
+        limit_as = cpu_only and sys.platform != "darwin"
+        preexec = _posix_preexec(limits.memory_mb, limit_address_space=limit_as)
+        limit_info["mechanism"] = "rlimit_as+rss_watchdog" if limit_as else "rss_watchdog"
 
     started = time.perf_counter()
     proc = subprocess.Popen(

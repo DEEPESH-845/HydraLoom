@@ -20,7 +20,8 @@ uv pip install --python .venv/Scripts/python.exe ultralytics==8.4.215 onnx==1.23
 ```
 
 Exact pins live in `backend/pyproject.toml`.
-On Linux and macOS the interpreter path is `.venv/bin/python`.
+On Linux and macOS the interpreter path is `.venv/bin/python`; on macOS install torch from PyPI (no `--index-url`).
+On macOS the sandbox memory limit is the RSS watchdog alone: the system refuses to lower `RLIMIT_AS`.
 
 ## Run
 

@@ -22,13 +22,19 @@ test.describe("gantry", () => {
     expect(pos[1]).toBeLessThanOrEqual(40);
     expect(pos[2]).toBe(false);
 
-    // stop mid-move freezes the target on the current position
+    // stop mid-move brakes to rest and stays there
     await page.mouse.click(box.x + 2, box.y + 2);
     await lab.fastForward(1);
     await lab.button(/^stop$/i).click();
+    const from = await lab.state((s) => s.engine.gantry.x.pos);
+    await lab.fastForward(3);
     const g = await lab.state((s) => s.engine.gantry);
+    expect(g.moving).toBe(false);
     expect(g.x.target).toBeCloseTo(g.x.pos, 5);
     expect(g.y.target).toBeCloseTo(g.y.pos, 5);
+    // it came to rest within the braking distance (15^2 / 60 cm) and did not drive back
+    expect(from - g.x.pos).toBeGreaterThanOrEqual(-1e-6);
+    expect(from - g.x.pos).toBeLessThan(3.8);
   });
 
   test("invariants hold under invalid store commands", async ({ lab }) => {

@@ -7,8 +7,10 @@ import { ENVIRONMENT_LIBRARY, ENVIRONMENT_ORDER, FIELD_ENVIRONMENT_IDS, ntuAt } 
 import { validateEnvironment, type EnvironmentDefinition } from "../world/schema";
 import { terrainHeight } from "../world/terrain";
 import { mountPose, project } from "./camera";
-import { FieldEngine } from "./engine";
-import { lightTerm, pathOptics, runFieldDetection, type TargetInstance } from "./detection";
+import { FIELD_DT, FieldEngine } from "./engine";
+import { toBox } from "../physics/vehicle";
+import { qFromEuler, headingToYaw } from "../physics/math";
+import { approachExtent, lightTerm, pathOptics, runFieldDetection, type TargetInstance } from "./detection";
 
 describe("environment library", () => {
   it("every definition validates", () => {
@@ -130,7 +132,7 @@ describe("field engine", () => {
     e.setConditions({ current: { speedMps: 1.8, headingDeg: 90, turbulence: 0, variability: 0 } });
     e.setPilotMode("MANUAL");
     const x0 = e.telemetry().position[0];
-    e.advance(20);
+    e.advance(12); // longer would reach the edge of the site, where the guard holds it
     const t = e.telemetry();
     assert.ok(t.position[0] > x0 + 5, `moved ${t.position[0] - x0}`);
     assert.equal(e.conditions.speedMps, 0.5);
@@ -180,11 +182,232 @@ describe("field engine", () => {
         assert.ok(def, `${id}: unknown mission ${m}`);
         for (const p of def.platforms) {
           if (p === "gantry" || p === "station" || !compatibility(env, p).ok) continue;
-          const r = missionRoute(def.id, { env, platform: p, start: [0, -3, 0], altitudeM: 2, swathM: 3 });
+          const r = missionRoute(def.id, { env, platform: p, start: [0, -3, 0], altitudeM: 2, swathM: 3, speedMps: 0.5 });
           if (def.id !== "calibration") assert.ok(r.length > 0, `${id}/${m}/${p}`);
           for (const w of r) assert.ok(Number.isFinite(w.x) && Number.isFinite(w.z));
         }
       }
     }
+  });
+});
+
+describe("shipwreck detection (regression: never classified in any field environment)", () => {
+  const hover = (env: (typeof FIELD_ENVIRONMENT_IDS)[number], range: number, approachDeg: number) => {
+    const e = new FieldEngine(env, "rov");
+    const w = e.targets.find((t) => t.class === "SHIPWRECK")!;
+    // hover at the survey altitude, `range` off the hull surface, looking at it: what a pilot does by hand
+    const a = (approachDeg * Math.PI) / 180;
+    const d = approachExtent(w, Math.cos(a), Math.sin(a)) + range;
+    const x = w.position[0] - Math.cos(a) * d;
+    const z = w.position[2] - Math.sin(a) * d;
+    e.vehicle!.position = [x, terrainHeight(e.env.geometry.terrain, x, z) + e.conditions.altitudeM, z];
+    e.vehicle!.attitude = qFromEuler(headingToYaw(((Math.atan2(Math.cos(a), -Math.sin(a)) * 180) / Math.PI + 360) % 360), 0, 0);
+    e.setPilotMode("HOLD");
+    let best = 0;
+    let cls = "";
+    for (let i = 0; i < 20; i++) {
+      e.advance(0.1);
+      const f = e.detections.find((q) => q.targetId === w.id);
+      if (f && f.confidence > best) [best, cls] = [f.confidence, f.class];
+    }
+    return { e, best, cls };
+  };
+  it("a pilot hovering off the hull gets SHIPWRECK in every environment", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS) {
+      const seen = [0, 60, 120, 180, 240, 300].map((a) => hover(id, 0.8, a));
+      const named = seen.filter((s) => s.cls === "SHIPWRECK").length;
+      assert.ok(named >= 4, `${id}: SHIPWRECK from ${named}/6 approaches, best ${Math.max(...seen.map((s) => s.best)).toFixed(2)}`);
+    }
+  });
+  it("finds made while piloting by hand are logged without a mission running", () => {
+    const { e } = hover("harbor", 0.8, 0);
+    assert.equal(e.phase, "IDLE");
+    assert.ok(e.finds().some((f) => f.trueClass === "SHIPWRECK"));
+    assert.ok(e.events.some((v) => v.kind === "DETECT" && v.text.startsWith("SHIPWRECK")));
+  });
+  it("the ROV detection mission classifies the wreck in every environment at default conditions", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS) {
+      const e = new FieldEngine(id, "rov");
+      e.setMission("detection");
+      e.startMission();
+      // stop on the exact step it completes: nothing seen afterwards may count
+      for (let i = 0; i < 1500 * 120 && e.phase === "RUNNING"; i++) e.advance(1 / 120);
+      assert.equal(e.phase, "COMPLETE", id);
+      const w = e.finds().find((f) => f.trueClass === "SHIPWRECK");
+      assert.ok(w?.correct, `${id}: wreck ${w ? `${w.class} ${w.confidence.toFixed(2)}` : "not found"}; found ${e.result!.targetsFound}/${e.result!.targetsTotal}`);
+    }
+  });
+  it("every target can reach its true class in ideal conditions", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS)
+      for (const t of ENVIRONMENT_LIBRARY[id].targets) assert.ok(t.detectability * (1 - 0.15 * t.burial) >= 0.67, `${id}/${t.id} can never exceed the classify threshold`);
+  });
+  it("nothing is seen through water far beyond its visibility, at any range", () => {
+    const e = new FieldEngine("harbor", "rov");
+    e.setConditions({ turbidity: 1 });
+    e.setMission("detection");
+    e.startMission();
+    for (let i = 0; i < 600 && e.phase === "RUNNING"; i++) e.advance(1);
+    assert.equal(e.finds().length, 0);
+  });
+});
+
+describe("navigation stays in the site, off the obstacles, and smooth", () => {
+  const drives: [string, Partial<{ surge: number; sway: number; heave: number; yaw: number }>][] = [
+    ["forward", { surge: 1 }],
+    ["back", { surge: -1 }],
+    ["port", { sway: -1 }],
+    ["starboard", { sway: 1 }],
+    ["up and forward", { surge: 0.5, heave: 1 }],
+    ["down and forward", { surge: 1, heave: -1 }],
+    ["circling", { surge: 1, yaw: 0.5 }],
+  ];
+  /** Flies until `seconds`, checking every step. Returns the peak yaw rate. */
+  const fly = (e: FieldEngine, seconds: number, label: string) => {
+    const b = e.bounds();
+    let yaw = 0;
+    for (let i = 0; i < seconds * 120; i++) {
+      e.advance(FIELD_DT);
+      const p = e.vehicle!.position;
+      assert.ok(p[0] >= b.x0 && p[0] <= b.x1 && p[2] >= b.z0 && p[2] <= b.z1, `${label}: left the site at ${p.map((v) => v.toFixed(1))}`);
+      assert.ok(p[1] <= 0, `${label}: above the surface`);
+      assert.ok(p[1] > terrainHeight(e.env.geometry.terrain, p[0], p[2]), `${label}: under the seabed`);
+      yaw = Math.max(yaw, Math.abs(e.vehicle!.angularVelocity[1]));
+    }
+    return yaw;
+  };
+  it("full stick in every direction never leaves the water of any site", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS)
+      for (const pf of ["rov", "auv"] as const) {
+        if (!compatibility(ENVIRONMENT_LIBRARY[id], pf).ok) continue;
+        for (const [name, st] of drives) {
+          const e = new FieldEngine(id, pf);
+          e.setPilotMode("MANUAL");
+          e.setStick(st);
+          const yaw = fly(e, id === "ocean" ? 200 : 90, `${id}/${pf} ${name}`);
+          assert.ok(yaw < 1.1, `${id}/${pf} ${name}: turns at ${((yaw * 180) / Math.PI).toFixed(0)} deg/s`);
+        }
+      }
+  });
+  it("a strong current cannot carry a drifting vehicle out of the site", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS)
+      for (const headingDeg of [0, 90, 180, 270]) {
+        const e = new FieldEngine(id, "rov");
+        e.setConditions({ current: { speedMps: 2, headingDeg } });
+        e.setPilotMode("MANUAL");
+        fly(e, 60, `${id} current ${headingDeg}`);
+      }
+  });
+  it("every mission stays in the site and inside no target", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS)
+      for (const pf of ["rov", "auv"] as const) {
+        if (!compatibility(ENVIRONMENT_LIBRARY[id], pf).ok) continue;
+        for (const m of ENVIRONMENT_LIBRARY[id].missions as (keyof typeof MISSIONS)[]) {
+          if (!MISSIONS[m].platforms.includes(pf) || m === "coverage-mapping") continue;
+          const e = new FieldEngine(id, pf);
+          e.setMission(m);
+          e.startMission();
+          const b = e.bounds();
+          for (let i = 0; i < 1300 * 12 && e.phase === "RUNNING"; i++) {
+            e.advance(0.1);
+            const p = e.vehicle!.position;
+            assert.ok(p[0] >= b.x0 && p[0] <= b.x1 && p[2] >= b.z0 && p[2] <= b.z1, `${id}/${pf}/${m} left the site`);
+          }
+          assert.equal(e.phase, "COMPLETE", `${id}/${pf}/${m} never finished`);
+        }
+      }
+  });
+  it("targets are solid: driving into a wreck stops at the hull, gently, still seeing it", () => {
+    for (const id of FIELD_ENVIRONMENT_IDS) {
+      const e = new FieldEngine(id, "rov");
+      e.setConditions({ current: { speedMps: 0 } });
+      const w = e.targets.find((t) => t.class === "SHIPWRECK")!;
+      const a = Math.PI / 2 - (w.yawDeg * Math.PI) / 180;
+      const d = approachExtent(w, Math.cos(a), Math.sin(a)) + 3;
+      const x = w.position[0] - Math.cos(a) * d;
+      const z = w.position[2] - Math.sin(a) * d;
+      // at the height of the hull, not of the ground it starts over (the river bank is higher than its bed)
+      const deck = w.position[1] + w.halfExtents[1] * (1 - w.burial);
+      e.vehicle!.position = [x, Math.max(deck - 0.1, terrainHeight(e.env.geometry.terrain, x, z) + 0.45), z];
+      e.vehicle!.attitude = qFromEuler(Math.atan2(-Math.sin(a), Math.cos(a)), 0, 0);
+      e.setPilotMode("MANUAL");
+      e.setStick({ surge: 0.2 });
+      let seen = false;
+      let hit = 0;
+      for (let i = 0; i < 25 * 120; i++) {
+        const before = Math.hypot(...e.vehicle!.velocity);
+        e.advance(FIELD_DT);
+        hit = Math.max(hit, before - Math.hypot(...e.vehicle!.velocity));
+        const { lx, lz } = toBox({ x: w.position[0], z: w.position[2], yawDeg: w.yawDeg, hx: 0, hz: 0, top: 0 }, e.vehicle!.position[0], e.vehicle!.position[2]);
+        const top = w.position[1] + w.halfExtents[1] * (1 - w.burial);
+        assert.ok(Math.abs(lx) > w.halfExtents[0] || Math.abs(lz) > w.halfExtents[2] || e.vehicle!.position[1] > top, `${id}: inside the hull`);
+        seen ||= e.detections.some((q) => q.class === "SHIPWRECK");
+      }
+      assert.ok(seen, `${id}: never classified on the way in`);
+      assert.ok(hit < 0.06, `${id}: lost ${hit.toFixed(2)} m/s in one step, a collision`);
+    }
+  });
+  it("sticks ramp: full ahead does not jolt, and releasing it glides", () => {
+    const e = new FieldEngine("ocean", "rov");
+    e.setConditions({ current: { speedMps: 0 } });
+    e.setPilotMode("MANUAL");
+    e.advance(2);
+    e.setStick({ surge: 1, yaw: 1 });
+    let prev = e.vehicle!.velocity[0];
+    let peak = 0;
+    for (let i = 0; i < 240; i++) {
+      e.advance(FIELD_DT);
+      peak = Math.max(peak, Math.abs(e.vehicle!.velocity[0] - prev) / FIELD_DT);
+      prev = e.vehicle!.velocity[0];
+    }
+    assert.ok(peak < 2.5, `accelerates at ${peak.toFixed(1)} m/s2`);
+  });
+});
+
+describe("detection while moving", () => {
+  it("guided detection classifies nearly every target, ROV and AUV", () => {
+    const floor: Record<string, number> = { "river/rov": 4, "ocean/auv": 4 };
+    for (const id of FIELD_ENVIRONMENT_IDS)
+      for (const pf of ["rov", "auv"] as const) {
+        if (!compatibility(ENVIRONMENT_LIBRARY[id], pf).ok) continue;
+        const e = new FieldEngine(id, pf);
+        e.setMission("detection");
+        e.startMission();
+        for (let i = 0; i < 1300 * 120 && e.phase === "RUNNING"; i++) e.advance(FIELD_DT);
+        const right = e.finds().filter((f) => f.correct).length;
+        assert.ok(right >= (floor[`${id}/${pf}`] ?? e.targets.length - 1), `${id}/${pf}: ${right}/${e.targets.length} classified`);
+        assert.ok(e.finds().some((f) => f.class === "SHIPWRECK"), `${id}/${pf}: wreck`);
+        assert.equal(e.result!.contacts <= 2, true, `${id}/${pf}: ${e.result!.contacts} contacts`);
+      }
+  });
+  it("a track survives a fast glance away and its label does not flicker", () => {
+    const e = new FieldEngine("reef", "rov");
+    e.setConditions({ current: { speedMps: 0 } });
+    const w = e.targets.find((t) => t.class === "SHIPWRECK")!;
+    const d = approachExtent(w, 1, 0) + 2.5;
+    const x = w.position[0] - d;
+    e.vehicle!.position = [x, terrainHeight(e.env.geometry.terrain, x, w.position[2]) + 2, w.position[2]];
+    e.vehicle!.attitude = qFromEuler(0, 0, 0);
+    e.setPilotMode("HOLD");
+    e.advance(2);
+    const labels = new Set<string>();
+    let gaps = 0;
+    e.setPilotMode("MANUAL");
+    for (let i = 0; i < 60; i++) {
+      // look left and right, up to full yaw rate, wreck always in the picture
+      e.setStick({ yaw: Math.sin(i / 4) * 0.5 });
+      e.advance(0.1);
+      const q = e.detections.find((f) => f.targetId === w.id);
+      if (q) labels.add(q.class);
+      else gaps++;
+    }
+    assert.deepEqual([...labels], ["SHIPWRECK"]);
+    assert.equal(gaps, 0, `${gaps} of 60 readings lost`);
+  });
+  it("a pipeline far longer than the picture is detected by the segment in view", () => {
+    const e = new FieldEngine("ocean", "auv");
+    e.setMission("pipeline-inspection");
+    e.startMission();
+    for (let i = 0; i < 300 * 120 && e.phase === "RUNNING"; i++) e.advance(FIELD_DT);
+    assert.ok(e.finds().some((f) => f.class === "PIPELINE"));
   });
 });

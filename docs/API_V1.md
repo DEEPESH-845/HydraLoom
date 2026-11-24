@@ -378,6 +378,7 @@ Top-level fields:
 | `confidence_histogram` | 10 bins over [0, 1] for TP and FP predictions |
 | `tp_below_conf_threshold` | Correct detections lost to the operating threshold |
 | `slices`, `slice_ranking`, `sensitivity` | Breakdown by condition and object attribute |
+| `condition_cells` | Joint turbidity x lighting counts (`turbidity`, `lighting`, `n_frames`, `n_gt`, `tp`, `fp`, `fn`) at the confidence threshold; frames missing either condition are in no cell. Absent from runs made before 2026-11-25 |
 | `latency`, `resources` | Measured timings and resource usage |
 | `hardware`, `hardware_profiles` | Selected profile block and every profile block |
 | `simulated` | Present only for mock runs |

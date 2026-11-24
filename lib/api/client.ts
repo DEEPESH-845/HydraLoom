@@ -36,7 +36,8 @@ export const API_ORIGIN = (process.env.NEXT_PUBLIC_GANTRYLAB_API ?? "http://loca
 export const API_BASE = `${API_ORIGIN}/api/v1`;
 
 /** The exact start command from backend/README_GANTRYLAB.md. */
-export const BACKEND_START_COMMAND = "cd backend\n.venv/Scripts/python -m uvicorn gantrylab.app:app --port 8000";
+const WINDOWS = typeof navigator !== "undefined" && /^win/i.test(navigator.platform);
+export const BACKEND_START_COMMAND = `cd backend\n.venv/${WINDOWS ? "Scripts" : "bin"}/python -m uvicorn gantrylab.app:app --port 8000`;
 
 export type ApiErrorKind = "unreachable" | "http" | "invalid_response" | "aborted";
 

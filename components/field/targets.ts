@@ -10,7 +10,7 @@ import { fbm3, merge, paint, std } from "./common";
 /*
  * Ground-truth targets at real scale. Every model is built inside its declared half extents (x length, y height,
  * z width) around its origin, which is the box centre the analytical detector projects (lib/field/detection.ts
- * targetCorners), so the rendered object and the analytic box agree. The root group of each target carries
+ * surfacePatches), so the rendered object and the analytic box agree. The root group of each target carries
  * userData.gtId and userData.gtClass; the dataset capture reads those to colour its instance-id pass.
  * Mines are inert training targets and are labelled as such on the casing.
  */

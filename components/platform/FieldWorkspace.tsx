@@ -13,7 +13,7 @@ import { FieldScene } from "@/components/field/FieldScene";
 import { lastCapture } from "./AnalysisCard";
 import { AnalysisCard } from "./AnalysisCard";
 import { EnvironmentCard } from "./EnvironmentCard";
-import { FieldFeed } from "./FieldFeed";
+import { DetectionBoxes, DetectionStrip, FieldFeed } from "./FieldFeed";
 import { PlatformCard } from "./PlatformCard";
 import { SimulationCard, VIEWS, drive } from "./SimulationCard";
 import { Row, SimTag, deg, f1, f2 } from "./ui";
@@ -34,6 +34,9 @@ const NAV: NavItem[] = [
   { n: "04", label: "Model Lab", href: "/models", title: "Upload and evaluate detection models (opens /models)" },
   { n: "05", label: "Analysis", ws: "analysis", title: "Live analysis, results and dataset capture" },
   { n: "06", label: "Reports", href: "/reports", title: "Engineering reports (opens /reports)" },
+  { n: "07", label: "Benchmark", href: "/benchmark", title: "Compare several models (opens /benchmark)" },
+  { n: "08", label: "Autonomy", href: "/autonomy", title: "Learned navigation and model switching (opens /autonomy)" },
+  { n: "09", label: "Hardware", href: "/hardware", title: "The physical gantry (opens /hardware)" },
 ];
 
 const CARDS: Record<WorkspaceId, () => React.JSX.Element> = {
@@ -125,6 +128,7 @@ function useExploreKeys() {
 export function FieldWorkspace() {
   const workspace = useFieldStore((s) => s.workspace);
   const exploring = useFieldStore((s) => s.exploring);
+  const view = useFieldStore((s) => s.view);
   useKeyboardPilot();
   useExploreKeys();
   useEffect(() => {
@@ -144,9 +148,11 @@ export function FieldWorkspace() {
           <FieldScene />
         </div>
         <div className="pointer-events-none absolute inset-0 select-none overflow-hidden max-[999px]:flex max-[999px]:flex-col">
+          {view === "pilot" && <DetectionBoxes full />}
           <Veil />
           <TopBar />
           <SiteTag />
+          <DetectionStrip />
           {/* right column: platform camera and key telemetry */}
           <div
             data-field="column"
@@ -206,7 +212,7 @@ function NavItems({ compact }: { compact?: boolean }) {
         const inner = (
           <>
             <span className={clsx("value text-[10px]", on ? "text-teal" : "text-dim")}>{it.n}</span>
-            <span className={clsx("label", on ? "text-teal" : "text-muted group-hover:text-text", compact && "max-[759px]:hidden", !compact && "max-[1279px]:hidden")}>{it.label}</span>
+            <span className={clsx("label", on ? "text-teal" : "text-muted group-hover:text-text", compact && "max-[759px]:hidden", !compact && !on && "max-[1679px]:hidden", !compact && on && "max-[1279px]:hidden")}>{it.label}</span>
           </>
         );
         return it.href ? (

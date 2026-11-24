@@ -426,6 +426,17 @@ export interface SliceMetrics {
   low_support: boolean;
 }
 
+/** Joint turbidity x lighting cell; absent from runs made before the backend reported it. */
+export interface ConditionCell {
+  turbidity: string;
+  lighting: string;
+  n_frames: number;
+  n_gt: number;
+  tp: number;
+  fp: number;
+  fn: number;
+}
+
 export interface RankedSlice {
   id: string;
   key: string;
@@ -536,6 +547,7 @@ export interface RunMetrics {
   tp_below_conf_threshold: number;
   failure_cap: number;
   slices: SliceMetrics[];
+  condition_cells?: ConditionCell[];
   slice_ranking: SliceRanking;
   sensitivity: Sensitivity[];
   latency: LatencyBlock;

@@ -427,6 +427,16 @@ class ConfidenceHistogram(BaseModel):
     iou_threshold: float
 
 
+class ConditionCell(BaseModel):
+    turbidity: str
+    lighting: str
+    n_frames: int
+    n_gt: int
+    tp: int
+    fp: int
+    fn: int
+
+
 class SliceMetrics(BaseModel):
     id: str
     key: str
@@ -558,6 +568,7 @@ class RunMetrics(BaseModel):
     tp_below_conf_threshold: int
     failure_cap: int
     slices: list[SliceMetrics]
+    condition_cells: list[ConditionCell] = []
     slice_ranking: SliceRanking
     sensitivity: list[Sensitivity]
     latency: LatencyBlock

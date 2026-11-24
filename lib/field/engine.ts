@@ -2,22 +2,26 @@
 // Pure TypeScript, no React or Three, fixed 120 Hz step, seeded: identical configuration and seed give identical
 // results in Node and the browser (lib/field/field.test.ts asserts it). docs/ARCHITECTURE.md section 4.
 
-import { AuvPilot, RovPilot, type PilotMode, type PilotTarget, type Stick, type Waypoint } from "../physics/autopilot";
+import { AuvPilot, RovPilot, guardCommand, type PilotMode, type PilotTarget, type Stick, type Waypoint } from "../physics/autopilot";
 import { CurrentField, DEFAULT_CURRENT, sanitizeCurrent, type CurrentConfig } from "../physics/current";
 import { headingToYaw, len, qFromEuler, qNormalize, qRotate, qToEuler, sub, yawToHeading, type Quat, type Vec3 } from "../physics/math";
 import { kinematicViscosity, pressureAt, waterDensity, type WaterState } from "../physics/seawater";
-import { ballastFor, createVehicleState, netWeight, stepVehicle, worldVelocity, type Collider, type VehicleParams, type VehicleState } from "../physics/vehicle";
-import { visibilityRange, waterOptics } from "../optics/water";
+import { ballastFor, createVehicleState, netWeight, stepVehicle, worldVelocity, boxGap, type Collider, type SolidBox, type VehicleParams, type VehicleState } from "../physics/vehicle";
+import { visibilityRange } from "../optics/water";
 import { MISSIONS, missionRoute, type MissionId } from "../missions";
 import { PLATFORMS, compatibility, type PlatformDefinition, type PlatformId } from "../platforms";
 import { ENVIRONMENT_LIBRARY, isFieldEnvironmentId, ntuAt } from "../world/environments";
 import type { EnvironmentDefinition, FieldEnvironmentId } from "../world/schema";
 import { terrainHeight } from "../world/terrain";
 import { mountPose, type CameraPose } from "./camera";
-import { lampReferenceM, pathOptics, runFieldDetection, type FieldDetection, type TargetInstance } from "./detection";
+import { approachExtent, lampReferenceM, pathOptics, runFieldDetection, workingRange, type FieldDetection, type TargetInstance } from "./detection";
 
 export const FIELD_DT = 1 / 120;
 const DETECT_HZ = 10;
+const ARRIVAL_DWELL_S = 2;
+/** Water kept between the hull and the edge of the drawn site, m. */
+const SITE_MARGIN_M = 0.4;
+const EDGE_CALM_M = 3;
 
 export type BallastMode = "auto" | "sea" | "fresh";
 
@@ -96,33 +100,42 @@ export interface FieldTelemetry {
   ntu: number;
   visibilityM: number;
   contact: boolean;
+  /** the envelope guard is holding the vehicle off an edge, an obstacle or the ground */
+  guarded: boolean;
   pilot: { mode: PilotMode; waypoint: number; waypoints: number; distanceM: number; crossTrackM: number };
 }
 
 const clampf = (v: number, lo: number, hi: number, fallback: number) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fallback);
-const waterOpticsAt = (env: EnvironmentDefinition, turbidity: number) => waterOptics({ ...env.water.optics, ntu: ntuAt(env, turbidity) });
 const NO_STICK: Stick = { surge: 0, sway: 0, heave: 0, yaw: 0 };
 
 /**
- * Default conditions for an environment and platform. The survey altitude follows the water: a pilot flies at
- * about 60 percent of the visibility range (green channel, 2 percent contrast), within the platform's limits.
+ * Default conditions for an environment and platform. The survey altitude puts the point the camera looks at within
+ * the detector's working range: along a camera tilted 30 degrees down that range is twice the altitude, not equal to it.
  */
 export function defaultConditions(env: EnvironmentDefinition, platform: PlatformId): FieldConditions {
-  const vis = visibilityRange(waterOpticsAt(env, env.defaults.turbidity).c[1]);
-  // lamp-lit water: the lamps, not the water, limit the range, so stay within about 1.5 lamp reference distances
-  const [lo, hi] = platform === "auv" ? [2, env.light.source === "lamp" ? 4 : 6] : [0.8, env.light.source === "lamp" ? 2.5 : 3];
-  return {
+  const lamp = env.light.source === "lamp";
+  const base = {
     turbidity: env.defaults.turbidity,
     lighting: env.defaults.lighting,
     // below about 30 m daylight is too weak for the camera, so an operator runs the lamps hard
-    lamps: env.light.source === "lamp" ? env.defaults.lighting : env.operatingDepthM > 30 ? 0.9 : 0.5,
+    lamps: lamp ? env.defaults.lighting : env.operatingDepthM > 30 ? 0.9 : 0.5,
+  };
+  const [lo, hi] = platform === "auv" ? [1.2, 6] : [0.5, 3];
+  const altitude = workingRangeFor(env, platform, base) * Math.sin((PLATFORMS[platform].camera.tiltDeg * Math.PI) / 180);
+  return {
+    ...base,
     current: sanitizeCurrent({ ...DEFAULT_CURRENT, ...env.current, roughnessM: env.seabed.hydraulicRoughnessM }),
     threshold: 0.5,
     speedMps: platform === "auv" ? 1.5 : 0.5,
-    altitudeM: Math.round(Math.min(hi, Math.max(lo, 0.6 * vis)) * 10) / 10,
+    altitudeM: Math.round(Math.min(hi, Math.max(lo, altitude)) * 10) / 10,
     ballast: "auto",
     seed: 1337,
   };
+}
+
+/** The detector's working range for a platform's lamps in given conditions, m. */
+export function workingRangeFor(env: EnvironmentDefinition, platform: PlatformId, c: { turbidity: number; lighting: number; lamps: number }): number {
+  return workingRange(env, { ...c, lampReferenceM: lampReferenceM(PLATFORMS[platform].lamps.lumens) });
 }
 
 export class FieldEngine {
@@ -170,9 +183,15 @@ export class FieldEngine {
   private fpIds = new Set<string>();
   private contacts = 0;
   private wasContact = false;
+  private contactArmed = true;
+  private contactClear = 0;
   private lastWaypoint = 0;
+  private arrivedS = 0;
   private bed = (x: number, z: number) => terrainHeight(this.env.geometry.terrain, x, z);
   private collider: Collider = { bed: this.bed, cylinders: [] };
+  /** the guard is holding the vehicle off an edge, an obstacle or the ground */
+  guarded = false;
+  private guardT = 0;
 
   constructor(envId: FieldEnvironmentId = "harbor", platform: PlatformId = "rov") {
     this.configure(envId, platform);
@@ -191,7 +210,11 @@ export class FieldEngine {
     this.env = env;
     this.platform = PLATFORMS[pid];
     this.bed = (x, z) => terrainHeight(env.geometry.terrain, x, z);
-    this.collider = { bed: this.bed, cylinders: this.solids() };
+    const [ex, ez] = env.geometry.extentM;
+    const quay = env.geometry.terrain.basin?.quayZ;
+    // the site is all there is: nothing is drawn or simulated beyond it, and the quay is a wall
+    const bounds = { x0: -ex / 2 + SITE_MARGIN_M, x1: ex / 2 - SITE_MARGIN_M, z0: Math.max(-ez / 2 + SITE_MARGIN_M, quay === undefined ? -Infinity : quay + 0.1), z1: ez / 2 - SITE_MARGIN_M };
+    this.collider = { bed: this.bed, cylinders: this.solids(), boxes: [], bounds };
     this.conditions = defaultConditions(env, pid);
     if (!env.missions.includes(this.mission) || !MISSIONS[this.mission as MissionId]?.platforms.includes(pid)) {
       this.mission = (env.missions.find((m) => MISSIONS[m as MissionId]?.platforms.includes(pid)) as MissionId) ?? "detection";
@@ -208,6 +231,24 @@ export class FieldEngine {
     const out: { x: number; z: number; radius: number }[] = [];
     for (const a of this.env.assets) if (a.solidRadius && a.at) for (const [x, z, , s] of a.at) out.push({ x, z, radius: a.solidRadius * s });
     return out;
+  }
+
+  /** Non-drifting targets are solid: a vehicle inside a hull is not a view of it. */
+  private solidBoxes(): SolidBox[] {
+    const drifting = new Set(this.env.targets.filter((t) => t.floating).map((t) => t.id));
+    return this.targets.filter((t) => !drifting.has(t.id)).map((t) => ({ x: t.position[0], z: t.position[2], yawDeg: t.yawDeg, hx: t.halfExtents[0], hz: t.halfExtents[2], top: t.position[1] - t.burial * t.halfExtents[1] + t.halfExtents[1] }));
+  }
+
+  /** Height of whatever is below, seabed or the top of a solid target within a small margin. */
+  floor = (x: number, z: number): number => {
+    let y = this.bed(x, z);
+    for (const b of this.collider.boxes ?? []) if (b.top > y && boxGap(b, x, z).d < 0.4) y = b.top;
+    return y;
+  };
+
+  /** Horizontal limits of the site, world m. */
+  bounds(): { x0: number; x1: number; z0: number; z1: number } {
+    return this.collider.bounds!;
   }
 
   private rebuildCurrent(): void {
@@ -235,6 +276,7 @@ export class FieldEngine {
       detectability: t.detectability,
       burial: t.burial,
     }));
+    this.collider.boxes = this.solidBoxes();
     this.floating = new Set(this.env.targets.filter((t) => t.floating).map((t) => t.id));
     this.targetVel.clear();
     const [ex] = this.env.geometry.extentM;
@@ -257,8 +299,9 @@ export class FieldEngine {
       // station: on the seabed a few metres from the first target, looking at it
       // stands off the target's near end by a distance the water allows
       const t0 = this.env.targets[0];
-      const standoff = Math.min(3.2, Math.max(1.2, 0.6 * this.visibility()));
-      const sx = t0 ? t0.x - Math.max(...t0.halfExtents) - standoff : 0;
+      const reach = workingRangeFor(this.env, "station", this.conditions);
+      const standoff = Math.min(3.2, Math.max(0.6, Math.sqrt(Math.max(0, reach ** 2 - 0.8 ** 2))));
+      const sx = t0 ? t0.x - approachExtent(t0, 1, 0) - standoff : 0;
       const sz = t0 ? t0.z + 0.4 : 0;
       this.station = { position: [sx, this.bed(sx, sz), sz], headingDeg: 90, panDeg: 0, tiltDeg: 0 };
     }
@@ -335,7 +378,7 @@ export class FieldEngine {
     this.missionStart = this.time;
     if (this.vehicle) {
       const swath = this.swathAt(this.conditions.altitudeM);
-      const route = missionRoute(this.mission, { env: this.env, platform: this.platform.id, start: [...this.vehicle.position] as [number, number, number], altitudeM: this.conditions.altitudeM, swathM: swath });
+      const route = missionRoute(this.mission, { env: this.env, platform: this.platform.id, start: [...this.vehicle.position] as [number, number, number], altitudeM: this.conditions.altitudeM, swathM: swath, speedMps: this.conditions.speedMps });
       this.rovPilot.reset();
       this.auvPilot.reset();
       if (route.length) {
@@ -364,6 +407,9 @@ export class FieldEngine {
     this.fpIds.clear();
     this.contacts = 0;
     this.wasContact = false;
+    this.contactArmed = true;
+    this.contactClear = 0;
+    this.arrivedS = 0;
   }
 
   /** Camera swath on the seabed at an altitude, m (width of the footprint across track). */
@@ -423,12 +469,15 @@ export class FieldEngine {
     this.prevAtt = [...this.bodyAttitude()];
     this.time += dt;
     const pos = this.bodyPosition();
-    this.localCurrent = this.current.sample(pos, this.time);
+    this.localCurrent = this.calmAtEdge(pos, this.current.sample(pos, this.time));
 
     if (this.vehicle && this.params) {
       const s = this.vehicle;
       const pilot = this.platform.id === "auv" ? this.auvPilot : this.rovPilot;
-      const cmd = pilot.update(this.params, s, this.pilotTarget, this.bed, dt);
+      const cmd = pilot.update(this.params, s, this.pilotTarget, this.floor, dt);
+      // shown for a moment after it acts, so it reads as a state and not a flicker
+      this.guardT = guardCommand(this.params, s, cmd, this.collider, this.floor, this.pilotTarget.mode === "MANUAL") ? 0.5 : Math.max(0, this.guardT - dt);
+      this.guarded = this.guardT > 0;
       const before: Vec3 = [...s.position];
       stepVehicle(this.params, s, cmd, { water: this.waterStateAt(s.position), current: this.localCurrent, surfaceY: 0 }, this.collider, dt);
       if (this.phase === "RUNNING") {
@@ -443,13 +492,19 @@ export class FieldEngine {
             this.lastWaypoint = pilot.status.waypointIndex;
             this.log("WAYPOINT", `waypoint ${Math.min(this.lastWaypoint, this.pilotTarget.route.length)}/${this.pilotTarget.route.length}`);
           }
-          if (pilot.status.done) this.finishMission("complete");
+          // the vehicle settles and looks before the last viewpoint counts as inspected
+          this.arrivedS = pilot.status.done ? this.arrivedS + dt : 0;
+          if (this.arrivedS >= ARRIVAL_DWELL_S) this.finishMission("complete");
         }
-        if (s.contact && !this.wasContact) {
+        // a hull bouncing along the bed is one contact, not one per bounce
+        this.contactClear = s.contact ? 0 : this.contactClear + dt;
+        if (s.contact && !this.wasContact && this.contactArmed) {
+          this.contactArmed = false;
           this.contacts++;
           this.log("CONTACT", `hull contact at (${s.position[0].toFixed(1)}, ${s.position[2].toFixed(1)})`);
         }
       }
+      if (this.contactClear > 1) this.contactArmed = true;
       this.wasContact = s.contact;
     } else if (this.phase === "RUNNING" && this.time - this.missionStart >= 60) {
       this.finishMission("complete");
@@ -530,16 +585,34 @@ export class FieldEngine {
       dt: step,
     });
     this.detectionMap = new Map(this.detections.map((d) => [d.targetId, d]));
-    if (this.phase !== "RUNNING") return;
+    // finds are recorded whoever is flying: a mission, a waypoint route or a pilot on the stick
     for (const d of this.detections) {
       const prev = this.seen.get(d.targetId);
-      if (!prev) {
-        this.seen.set(d.targetId, { best: d, firstRange: d.distance });
-        this.log("DETECT", `${d.class} ${(d.confidence * 100).toFixed(1)}% at ${d.distance.toFixed(1)} m (${d.targetId})`);
-      } else if (d.confidence > prev.best.confidence) prev.best = d;
+      if (!prev || (d.correct && !prev.best.correct)) this.log("DETECT", `${d.class} ${(d.confidence * 100).toFixed(1)}% at ${d.distance.toFixed(1)} m (${d.targetId})`);
+      if (!prev) this.seen.set(d.targetId, { best: d, firstRange: d.distance });
+      else if (d.confidence > prev.best.confidence) prev.best = d;
       if (!d.correct && d.class !== "UNKNOWN") this.fpIds.add(d.targetId);
     }
-    this.markCoverage(cam);
+    if (this.phase === "RUNNING") this.markCoverage(cam);
+  }
+
+  /** Best detection of every target found since the last reset or mission start. */
+  finds(): FieldDetection[] {
+    return [...this.seen.values()].map((s) => s.best);
+  }
+
+  /**
+   * The flow out of the site fades over the last metres: a current stronger than the thrusters would otherwise pin a
+   * vehicle against the edge of the world, which is a limit of the simulation and not of the vehicle.
+   */
+  private calmAtEdge(p: Vec3, u: Vec3): Vec3 {
+    const b = this.collider.bounds;
+    if (!b || !this.vehicle) return u;
+    const fade = (d: number) => {
+      const t = Math.min(1, Math.max(0, (d - 0.4) / EDGE_CALM_M));
+      return t * t * (3 - 2 * t);
+    };
+    return [u[0] * fade(u[0] > 0 ? b.x1 - p[0] : p[0] - b.x0), u[1], u[2] * fade(u[2] > 0 ? b.z1 - p[2] : p[2] - b.z0)];
   }
 
   private coverageCell(): number {
@@ -671,6 +744,7 @@ export class FieldEngine {
       ntu: ntuAt(this.env, this.conditions.turbidity),
       visibilityM: this.visibility(),
       contact: s?.contact ?? false,
+      guarded: this.guarded,
       pilot: { mode: this.pilotTarget.mode, waypoint: pilot.waypointIndex, waypoints: this.pilotTarget.route.length, distanceM: pilot.distanceM, crossTrackM: pilot.crossTrackM },
     };
   }
