@@ -1,6 +1,18 @@
+import math
+
 from simulation.physics_engine import ThrusterPhysicsEngine
 from simulation.sensor_sim import SimulatedIMU, SimulatedDepth, SimulatedPropulsion
 from serial_bridge import SerialBridge
+
+MODES = ("SIMULATION", "HARDWARE")
+
+
+def _pwm(value) -> float:
+    """A thruster command: a finite number, clamped to -100..100 percent. Anything else is rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"PWM must be a finite number, got {value!r}")
+    return max(-100.0, min(100.0, float(value)))
+
 
 class HALBroker:
     """
@@ -22,13 +34,10 @@ class HALBroker:
         # Initialize SerialBridge for hardware mode
         self.serial_bridge = SerialBridge()
         
-        # Attempt hardware connection on startup
-        try:
-            self.serial_bridge.connect()
-            self.hardware_connected = True
-        except Exception as e:
-            print(f"[HAL] Hardware connection failed: {e}. Falling back to SIMULATION.")
-            self.hardware_connected = False
+        # Attempt hardware connection on startup; connect() reports whether the port actually opened
+        self.hardware_connected = self.serial_bridge.connect()
+        if not self.hardware_connected:
+            print("[HAL] Hardware connection failed. Falling back to SIMULATION.")
         
         # Start physics deterministic loop
         self.physics.start()
@@ -64,7 +73,8 @@ class HALBroker:
             # Hardware mode - read from SerialBridge
             if not self.hardware_connected:
                 return self._get_offline_telemetry("HARDWARE")
-            
+
+            # {} when the link is down or silent: served as offline, never as stale live data
             hw_data = self.serial_bridge.get_latest()
             if not hw_data:
                 return self._get_offline_telemetry("HARDWARE")
@@ -121,43 +131,43 @@ class HALBroker:
         }
 
     def send_command(self, cmd_dict: dict):
-        # E.g. {"t1": 50, "t2": 50, "t3": -10, "t4": -10}
+        """
+        E.g. {"t1": 50, "t2": 50, "t3": -10, "t4": -10}. Raises ValueError for anything that is not an object of
+        finite numbers; values are clamped to -100..100 before they reach the physics or the MCU.
+        """
+        if not isinstance(cmd_dict, dict):
+            raise ValueError("SET_PWM payload must be an object of t1..t4")
+        pwm = {k: _pwm(cmd_dict.get(k, 0)) for k in ("t1", "t2", "t3", "t4")}
         if self.mode == "SIMULATION":
-            self.sim_propulsion.set_pwm(
-                cmd_dict.get("t1", 0),
-                cmd_dict.get("t2", 0),
-                cmd_dict.get("t3", 0),
-                cmd_dict.get("t4", 0)
-            )
+            self.sim_propulsion.set_pwm(pwm["t1"], pwm["t2"], pwm["t3"], pwm["t4"])
         else:
             # Hardware mode - route to SerialBridge
             if self.hardware_connected:
-                self.serial_bridge.send_command(cmd_dict)
+                self.serial_bridge.send_command(pwm)
     
     def set_mode(self, new_mode: str) -> dict:
         """
         Switch between SIMULATION and HARDWARE modes.
         Returns status dict with success/error information.
         """
+        if new_mode not in MODES:
+            return {"success": False, "message": f"Unknown mode {new_mode!r}; expected one of {', '.join(MODES)}"}
         if self.mode == new_mode:
             return {"success": True, "message": "Already in target mode"}
-        
+
         self.transitioning = True
-        
+
         if new_mode == "HARDWARE":
-            # Connect to hardware
-            try:
-                self.serial_bridge.connect()
-                self.hardware_connected = True
-                self.mode = new_mode
-                self.transitioning = False
-                print(f"[HALBroker] Switched to HARDWARE mode. Connected to {self.serial_bridge.port}")
-                return {"success": True, "message": "Connected to hardware"}
-            except Exception as e:
-                self.transitioning = False
-                self.hardware_connected = False
-                print(f"[HALBroker] Failed to connect to hardware: {e}")
-                return {"success": False, "message": f"Hardware connection failed: {str(e)}"}
+            # Reuse a live link; otherwise open the port, and fail honestly when it does not open
+            if not (self.hardware_connected and self.serial_bridge.is_connected()):
+                self.hardware_connected = self.serial_bridge.connect()
+            self.transitioning = False
+            if not self.hardware_connected:
+                print(f"[HALBroker] Failed to connect to hardware on {self.serial_bridge.port}")
+                return {"success": False, "message": f"Hardware connection failed: cannot open {self.serial_bridge.port}"}
+            self.mode = new_mode
+            print(f"[HALBroker] Switched to HARDWARE mode. Connected to {self.serial_bridge.port}")
+            return {"success": True, "message": "Connected to hardware"}
         else:
             # Switch to simulation - disconnect hardware
             if self.hardware_connected:

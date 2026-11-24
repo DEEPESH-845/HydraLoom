@@ -64,27 +64,35 @@ async def command_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            cmd = json.loads(data)
-            
-            if cmd.get("type") == "SET_MODE":
-                new_mode = cmd.get("mode")
-                result = hal_broker.set_mode(new_mode)
-                vision_pipeline.set_mode(new_mode)
-                
-                # Send mode switch result back to frontend
-                await websocket.send_json({
-                    "type": "MODE_SWITCH_RESULT",
-                    "success": result["success"],
-                    "message": result["message"],
-                    "mode": hal_broker.mode
-                })
-                print(f"[Main] Mode switch to {new_mode}: {result['message']}")
-            elif cmd.get("type") == "INJECT_FAULT":
-                fault_injector.trigger_anomaly(cmd.get("fault"))
-            elif cmd.get("type") == "SET_PWM":
-                hal_broker.send_command(cmd.get("payload"))
-    except Exception as e:
-        # Catch WebSocketDisconnect, ConnectionClosedOK, etc.
+            # A malformed command is answered with an ERROR and the channel stays open for the next one.
+            try:
+                cmd = json.loads(data)
+                if not isinstance(cmd, dict):
+                    raise ValueError("command must be a JSON object")
+                kind = cmd.get("type")
+                if kind == "SET_MODE":
+                    new_mode = cmd.get("mode")
+                    result = hal_broker.set_mode(new_mode)
+                    if result["success"]:
+                        vision_pipeline.set_mode(hal_broker.mode)
+
+                    # Send mode switch result back to frontend
+                    await websocket.send_json({
+                        "type": "MODE_SWITCH_RESULT",
+                        "success": result["success"],
+                        "message": result["message"],
+                        "mode": hal_broker.mode
+                    })
+                    print(f"[Main] Mode switch to {new_mode!r}: {result['message']}")
+                elif kind == "INJECT_FAULT":
+                    fault_injector.trigger_anomaly(cmd.get("fault"))
+                elif kind == "SET_PWM":
+                    hal_broker.send_command(cmd.get("payload"))
+                else:
+                    raise ValueError(f"unknown command type {kind!r}")
+            except (ValueError, TypeError) as e:  # json.JSONDecodeError is a ValueError
+                await websocket.send_json({"type": "ERROR", "message": str(e)})
+    except WebSocketDisconnect:
         pass
 
 if __name__ == "__main__":

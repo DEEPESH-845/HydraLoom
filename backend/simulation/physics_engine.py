@@ -64,44 +64,49 @@ class ThrusterPhysicsEngine:
     def _physics_loop(self):
         dt = 0.01 # 100Hz loop
         while self.running:
-            with self.lock:
-                # 1. Map PWM to physical force (simplified curve)
-                # Apply efficiency multipliers (fault injection)
-                eff_t1 = self.t1 * self.efficiency[0]
-                eff_t2 = self.t2 * self.efficiency[1]
-                eff_t3 = self.t3 * self.efficiency[2]
-                eff_t4 = self.t4 * self.efficiency[3]
-                
-                f_fwd = (eff_t1 + eff_t2) * 0.1
-                f_yaw = (eff_t1 - eff_t2) * 0.05
-                f_heave = (eff_t3 + eff_t4) * 0.1
-                
-                # 2. Calculate Accelerations
-                accel_yaw = f_yaw / self.rotational_inertia
-                # Gravity + Buoyancy + Thruster force
-                accel_depth = (f_heave / self.mass) - self.buoyancy_offset
-                
-                # 3. Apply Drag (proportional to square of velocity, but linear for low speeds)
-                drag_yaw = -self.angular_drag_coeff * self.yaw_vel
-                drag_depth = -self.water_drag_coeff * self.depth_vel
-                
-                accel_yaw += drag_yaw
-                accel_depth += drag_depth
-                
-                # 4. Euler Integration
-                self.yaw_vel += accel_yaw * dt
-                self.depth_vel += accel_depth * dt
-                
-                self.yaw = (self.yaw + self.yaw_vel * dt) % 360.0
-                self.depth += self.depth_vel * dt
-                
-                # Surface floor limit
-                if self.depth < 0:
-                    self.depth = 0
-                    self.depth_vel = 0
-                    
-                # Passive roll/pitch stabilization (pendulum effect)
-                self.roll *= 0.98
-                self.pitch *= 0.98
-                
+            try:
+                self._step(dt)
+            except Exception as e:  # a bad step must never freeze the digital twin for good
+                print(f"[Physics] step failed: {e!r}")
             time.sleep(dt)
+
+    def _step(self, dt: float):
+        with self.lock:
+            # 1. Map PWM to physical force (simplified curve)
+            # Apply efficiency multipliers (fault injection)
+            eff_t1 = self.t1 * self.efficiency[0]
+            eff_t2 = self.t2 * self.efficiency[1]
+            eff_t3 = self.t3 * self.efficiency[2]
+            eff_t4 = self.t4 * self.efficiency[3]
+            
+            f_fwd = (eff_t1 + eff_t2) * 0.1
+            f_yaw = (eff_t1 - eff_t2) * 0.05
+            f_heave = (eff_t3 + eff_t4) * 0.1
+            
+            # 2. Calculate Accelerations
+            accel_yaw = f_yaw / self.rotational_inertia
+            # Gravity + Buoyancy + Thruster force
+            accel_depth = (f_heave / self.mass) - self.buoyancy_offset
+            
+            # 3. Apply Drag (proportional to square of velocity, but linear for low speeds)
+            drag_yaw = -self.angular_drag_coeff * self.yaw_vel
+            drag_depth = -self.water_drag_coeff * self.depth_vel
+            
+            accel_yaw += drag_yaw
+            accel_depth += drag_depth
+            
+            # 4. Euler Integration
+            self.yaw_vel += accel_yaw * dt
+            self.depth_vel += accel_depth * dt
+            
+            self.yaw = (self.yaw + self.yaw_vel * dt) % 360.0
+            self.depth += self.depth_vel * dt
+            
+            # Surface floor limit
+            if self.depth < 0:
+                self.depth = 0
+                self.depth_vel = 0
+                
+            # Passive roll/pitch stabilization (pendulum effect)
+            self.roll *= 0.98
+            self.pitch *= 0.98
