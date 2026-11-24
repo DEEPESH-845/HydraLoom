@@ -1,0 +1,68 @@
+{
+  "v": 1,
+  "t": "2026-11-25T04:15:00.000+05:30",
+  "source": "real",
+  "rig": "bench-v1",
+  "gantry": {
+    "state": "MOVING",
+    "x_mm": 120.5,
+    "y_mm": 15,
+    "target": [
+      150,
+      225
+    ]
+  },
+  "search": {
+    "status": "running",
+    "step": 4,
+    "cell": [
+      1,
+      2
+    ],
+    "visited": [
+      [
+        1,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "found": [
+      {
+        "id": "w1",
+        "x_mm": 100,
+        "y_mm": 200,
+        "conf": 0.9,
+        "centred": true
+      }
+    ]
+  },
+  "detections": [
+    {
+      "x1": 1,
+      "y1": 2,
+      "x2": 3,
+      "y2": 4,
+      "conf": 0.8,
+      "label": "shipwreck"
+    }
+  ],
+  "fps": 5.0,
+  "throttled": "0x0",
+  "temp_c": 51.2
+}

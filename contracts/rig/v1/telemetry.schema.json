@@ -1,0 +1,271 @@
+{
+  "$defs": {
+    "Detection": {
+      "additionalProperties": false,
+      "properties": {
+        "x1": {
+          "title": "X1",
+          "type": "number"
+        },
+        "y1": {
+          "title": "Y1",
+          "type": "number"
+        },
+        "x2": {
+          "title": "X2",
+          "type": "number"
+        },
+        "y2": {
+          "title": "Y2",
+          "type": "number"
+        },
+        "conf": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Conf",
+          "type": "number"
+        },
+        "label": {
+          "const": "shipwreck",
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "conf",
+        "label"
+      ],
+      "title": "Detection",
+      "type": "object"
+    },
+    "Found": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "x_mm": {
+          "title": "X Mm",
+          "type": "number"
+        },
+        "y_mm": {
+          "title": "Y Mm",
+          "type": "number"
+        },
+        "conf": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Conf",
+          "type": "number"
+        },
+        "centred": {
+          "title": "Centred",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "x_mm",
+        "y_mm",
+        "conf",
+        "centred"
+      ],
+      "title": "Found",
+      "type": "object"
+    },
+    "Gantry": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "DISARMED",
+            "ARMED",
+            "HOMING",
+            "IDLE",
+            "MOVING",
+            "HOLD",
+            "ESTOP",
+            "FAULT"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "x_mm": {
+          "title": "X Mm",
+          "type": "number"
+        },
+        "y_mm": {
+          "title": "Y Mm",
+          "type": "number"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target"
+        }
+      },
+      "required": [
+        "state",
+        "x_mm",
+        "y_mm",
+        "target"
+      ],
+      "title": "Gantry",
+      "type": "object"
+    },
+    "Search": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "idle",
+            "running",
+            "aligning",
+            "confirming",
+            "parking",
+            "done"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "step": {
+          "minimum": 0,
+          "title": "Step",
+          "type": "integer"
+        },
+        "cell": {
+          "anyOf": [
+            {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cell"
+        },
+        "visited": {
+          "items": {
+            "items": {
+              "enum": [
+                0,
+                1
+              ],
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Visited",
+          "type": "array"
+        },
+        "found": {
+          "items": {
+            "$ref": "#/$defs/Found"
+          },
+          "title": "Found",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "step",
+        "cell",
+        "visited",
+        "found"
+      ],
+      "title": "Search",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "title": "V",
+      "type": "integer"
+    },
+    "t": {
+      "format": "date-time",
+      "title": "T",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "real",
+        "sim"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "rig": {
+      "const": "bench-v1",
+      "title": "Rig",
+      "type": "string"
+    },
+    "gantry": {
+      "$ref": "#/$defs/Gantry"
+    },
+    "search": {
+      "$ref": "#/$defs/Search"
+    },
+    "detections": {
+      "items": {
+        "$ref": "#/$defs/Detection"
+      },
+      "title": "Detections",
+      "type": "array"
+    },
+    "fps": {
+      "minimum": 0,
+      "title": "Fps",
+      "type": "number"
+    },
+    "throttled": {
+      "pattern": "^0x[0-9a-fA-F]+$",
+      "title": "Throttled",
+      "type": "string"
+    },
+    "temp_c": {
+      "title": "Temp C",
+      "type": "number"
+    }
+  },
+  "required": [
+    "v",
+    "t",
+    "source",
+    "rig",
+    "gantry",
+    "search",
+    "detections",
+    "fps",
+    "throttled",
+    "temp_c"
+  ],
+  "title": "Telemetry",
+  "type": "object"
+}

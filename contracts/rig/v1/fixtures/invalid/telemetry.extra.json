@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "t": "2026-11-25T04:15:00.000+05:30",
+  "source": "sim",
+  "rig": "bench-v1",
+  "gantry": {
+    "state": "DISARMED",
+    "x_mm": 15,
+    "y_mm": 15,
+    "target": null
+  },
+  "search": {
+    "status": "idle",
+    "step": 0,
+    "cell": null,
+    "visited": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "found": []
+  },
+  "detections": [],
+  "fps": 5.0,
+  "throttled": "0x0",
+  "temp_c": 51.2,
+  "foo": 1
+}

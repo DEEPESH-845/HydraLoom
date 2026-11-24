@@ -1,0 +1,78 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "title": "V",
+      "type": "integer"
+    },
+    "source": {
+      "enum": [
+        "real",
+        "sim"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "rig": {
+      "const": "bench-v1",
+      "title": "Rig",
+      "type": "string"
+    },
+    "dry_run": {
+      "title": "Dry Run",
+      "type": "boolean"
+    },
+    "versions": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Versions",
+      "type": "object"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Model"
+    },
+    "camera": {
+      "title": "Camera",
+      "type": "boolean"
+    },
+    "serial": {
+      "title": "Serial",
+      "type": "boolean"
+    },
+    "throttled": {
+      "anyOf": [
+        {
+          "pattern": "^0x[0-9a-fA-F]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Throttled"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "rig",
+    "dry_run",
+    "versions",
+    "model",
+    "camera",
+    "serial",
+    "throttled"
+  ],
+  "title": "Health",
+  "type": "object"
+}

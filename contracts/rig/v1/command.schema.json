@@ -1,0 +1,169 @@
+{
+  "$defs": {
+    "Arm": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "cmd": {
+          "const": "arm",
+          "title": "Cmd",
+          "type": "string"
+        },
+        "phrase": {
+          "const": "ARM GANTRY",
+          "title": "Phrase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "cmd",
+        "phrase"
+      ],
+      "title": "Arm",
+      "type": "object"
+    },
+    "Move": {
+      "additionalProperties": false,
+      "description": "Shape only. The bridge rejects targets outside the safe box; it never clamps.",
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "cmd": {
+          "const": "move",
+          "title": "Cmd",
+          "type": "string"
+        },
+        "x_mm": {
+          "title": "X Mm",
+          "type": "number"
+        },
+        "y_mm": {
+          "title": "Y Mm",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "cmd",
+        "x_mm",
+        "y_mm"
+      ],
+      "title": "Move",
+      "type": "object"
+    },
+    "Simple": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "cmd": {
+          "enum": [
+            "disarm",
+            "estop",
+            "reset_fault",
+            "set_origin_here",
+            "park",
+            "stop",
+            "heartbeat"
+          ],
+          "title": "Cmd",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "cmd"
+      ],
+      "title": "Simple",
+      "type": "object"
+    },
+    "StartSearch": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "cmd": {
+          "const": "start_search",
+          "title": "Cmd",
+          "type": "string"
+        },
+        "policy": {
+          "enum": [
+            "rl",
+            "sweep"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "conf": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Conf",
+          "type": "number"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "cmd",
+        "policy",
+        "conf",
+        "model"
+      ],
+      "title": "StartSearch",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "arm": "#/$defs/Arm",
+      "disarm": "#/$defs/Simple",
+      "estop": "#/$defs/Simple",
+      "heartbeat": "#/$defs/Simple",
+      "move": "#/$defs/Move",
+      "park": "#/$defs/Simple",
+      "reset_fault": "#/$defs/Simple",
+      "set_origin_here": "#/$defs/Simple",
+      "start_search": "#/$defs/StartSearch",
+      "stop": "#/$defs/Simple"
+    },
+    "propertyName": "cmd"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Arm"
+    },
+    {
+      "$ref": "#/$defs/Simple"
+    },
+    {
+      "$ref": "#/$defs/Move"
+    },
+    {
+      "$ref": "#/$defs/StartSearch"
+    }
+  ],
+  "title": "Command"
+}

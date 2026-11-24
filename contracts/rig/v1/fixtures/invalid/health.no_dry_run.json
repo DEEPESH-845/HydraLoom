@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "source": "sim",
+  "rig": "bench-v1",
+  "versions": {
+    "bridge": "0.1.0"
+  },
+  "model": "v3",
+  "camera": true,
+  "serial": false,
+  "throttled": "0x0"
+}

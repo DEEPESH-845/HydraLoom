@@ -1,0 +1,7 @@
+{
+  "id": "1",
+  "cmd": "start_search",
+  "policy": "ppo",
+  "conf": 0.5,
+  "model": "v3"
+}
