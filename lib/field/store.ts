@@ -33,6 +33,10 @@ interface FieldStore extends FieldSnapshot {
   engine: FieldEngine;
   workspace: WorkspaceId;
   view: ViewMode;
+  /** free exploration: the panels step aside so the whole window is the site */
+  exploring: boolean;
+  /** bumps on every recenter request so the camera rig refits the overview even when the view is already overview */
+  viewEpoch: number;
   /** false while the 3D world is being swapped; the UI veils the view meanwhile */
   worldReady: boolean;
   /** main view water is thinned for the overview; the vehicle camera always sees true water */
@@ -42,6 +46,9 @@ interface FieldStore extends FieldSnapshot {
   publish: () => void;
   setWorkspace: (w: WorkspaceId) => void;
   setView: (v: ViewMode) => void;
+  setExploring: (v: boolean) => void;
+  /** back to the whole-site overview, refitted to the current layout */
+  recenter: () => void;
   selectEnvironment: (id: FieldEnvironmentId) => void;
   selectPlatform: (id: PlatformId) => void;
   setMission: (id: MissionId) => void;
@@ -110,6 +117,8 @@ export const useFieldStore = create<FieldStore>((set, get) => {
     ...snapshot(engine),
     workspace: "environment",
     view: "overview",
+    exploring: false,
+    viewEpoch: 0,
     worldReady: true,
     overviewThinning: true,
     showFlow: true,
@@ -117,11 +126,16 @@ export const useFieldStore = create<FieldStore>((set, get) => {
     publish,
     setWorkspace: (workspace) => set({ workspace }),
     setView: (view) => set({ view }),
+    setExploring: (exploring) => {
+      if (exploring !== get().exploring) set({ exploring });
+    },
+    recenter: () => set({ view: "overview", viewEpoch: get().viewEpoch + 1 }),
     selectEnvironment: (id) => {
       if (!isFieldEnvironmentId(id) || id === engine.env.id) return;
       engine.configure(id, get().platformId);
       saveSelection(id, engine.platform.id);
-      set({ selectedTargetId: null });
+      // a free camera was placed for the old site (the deep sea lies 1.5 km lower): the new site opens on its overview
+      set({ selectedTargetId: null, ...(get().view === "free" ? { view: "overview" as const } : {}) });
       publish();
     },
     selectPlatform: (id) => {

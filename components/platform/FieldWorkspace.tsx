@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { Pause, Play } from "lucide-react";
+import { Focus, Pause, Play, Rotate3d } from "lucide-react";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import Link from "next/link";
 import { useEffect } from "react";
@@ -104,9 +104,29 @@ function useKeyboardPilot() {
   }, []);
 }
 
+/** H toggles explore (panels step aside), Esc leaves it, C recenters on the whole site. */
+function useExploreKeys() {
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const s = useFieldStore.getState();
+      const k = e.key.toLowerCase();
+      if (k === "h") s.setExploring(!s.exploring);
+      else if (e.key === "Escape" && s.exploring) s.setExploring(false);
+      else if (k === "c") s.recenter();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", down);
+    return () => window.removeEventListener("keydown", down);
+  }, []);
+}
+
 export function FieldWorkspace() {
   const workspace = useFieldStore((s) => s.workspace);
+  const exploring = useFieldStore((s) => s.exploring);
   useKeyboardPilot();
+  useExploreKeys();
   useEffect(() => {
     // deep links from the other workspaces (/models, /reports): /?ws=platform opens 02 directly
     const ws = new URLSearchParams(window.location.search).get("ws");
@@ -130,21 +150,25 @@ export function FieldWorkspace() {
           {/* right column: platform camera and key telemetry */}
           <div
             data-field="column"
-            className="pointer-events-auto absolute right-4 top-14 flex max-h-[calc(100%-4.5rem)] w-[340px] flex-col gap-2 max-[1259px]:w-[300px] max-[999px]:right-2 max-[999px]:w-[220px] max-[759px]:w-[176px]"
+            className={clsx(
+              exploring && "invisible",
+              "pointer-events-auto absolute right-4 top-14 flex max-h-[calc(100%-4.5rem)] w-[340px] flex-col gap-2 max-[1259px]:w-[300px] max-[999px]:right-2 max-[999px]:w-[220px] max-[759px]:w-[176px]",
+            )}
           >
             <FieldFeed />
             <div className="min-h-0 overflow-y-auto max-[999px]:hidden">
               <KeyTelemetry />
             </div>
           </div>
-          <Compass />
+          {!exploring && <Compass />}
           {/* workspace strip below 1000 px; the desktop nav lives in the top bar */}
-          <nav data-field="nav" aria-label="Workspaces" className="pointer-events-auto hidden max-[999px]:static max-[999px]:mx-auto max-[999px]:mt-auto max-[999px]:flex max-[999px]:w-[calc(100%-1rem)] max-[999px]:border max-[999px]:border-b-0 max-[999px]:border-line max-[999px]:bg-panel/95">
+          <nav data-field="nav" data-exploring={exploring} aria-label="Workspaces" className="pointer-events-auto hidden data-[exploring=true]:invisible max-[999px]:static max-[999px]:mx-auto max-[999px]:mt-auto max-[999px]:flex max-[999px]:w-[calc(100%-1rem)] max-[999px]:border max-[999px]:border-b-0 max-[999px]:border-line max-[999px]:bg-panel/95">
             <NavItems compact />
           </nav>
           <div
             data-field="card"
-            className="pointer-events-none absolute bottom-6 left-4 w-[calc(100%-2rem)] max-w-[640px] min-[1000px]:max-w-[min(640px,calc(100%-340px-3rem-200px))] max-[1259px]:min-[1000px]:max-w-[min(640px,calc(100%-300px-3rem-200px))] max-[999px]:static max-[999px]:mx-auto max-[999px]:mb-2 max-[999px]:w-[calc(100%-1rem)] max-[999px]:max-w-none"
+            data-exploring={exploring}
+            className="pointer-events-none absolute bottom-6 data-[exploring=true]:invisible left-4 w-[calc(100%-2rem)] max-w-[640px] min-[1000px]:max-w-[min(640px,calc(100%-340px-3rem-200px))] max-[1259px]:min-[1000px]:max-w-[min(640px,calc(100%-300px-3rem-200px))] max-[999px]:static max-[999px]:mx-auto max-[999px]:mb-2 max-[999px]:w-[calc(100%-1rem)] max-[999px]:max-w-none"
           >
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
@@ -160,6 +184,7 @@ export function FieldWorkspace() {
               </motion.div>
             </AnimatePresence>
           </div>
+          <AnimatePresence>{exploring && <ExploreHint key="explore" />}</AnimatePresence>
         </div>
       </main>
     </MotionConfig>
@@ -198,9 +223,40 @@ function NavItems({ compact }: { compact?: boolean }) {
   );
 }
 
+/** Shown while the panels are hidden: how to move through the site, and the way back. */
+function ExploreHint() {
+  const setExploring = useFieldStore((s) => s.setExploring);
+  const recenter = useFieldStore((s) => s.recenter);
+  return (
+    <motion.div
+      className="panel pointer-events-auto absolute bottom-5 left-1/2 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5"
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 6 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      role="status"
+      data-testid="explore-hint"
+    >
+      <span className="label text-teal">Explore</span>
+      <span className="text-[12px] text-muted">Drag to orbit, right-drag to pan, scroll to zoom toward the cursor, arrow keys glide, double-click to focus a point.</span>
+      <span className="flex gap-1.5">
+        <button type="button" className="btn flex items-center gap-1.5" onClick={recenter} title="Whole site (C)">
+          <Focus size={13} aria-hidden /> Recenter
+        </button>
+        <button type="button" className="btn" onClick={() => setExploring(false)} title="Show panels (H or Esc)">
+          Done
+        </button>
+      </span>
+    </motion.div>
+  );
+}
+
 function TopBar() {
   const view = useFieldStore((s) => s.view);
   const setView = useFieldStore((s) => s.setView);
+  const exploring = useFieldStore((s) => s.exploring);
+  const setExploring = useFieldStore((s) => s.setExploring);
+  const recenter = useFieldStore((s) => s.recenter);
   return (
     <header data-field="header" className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-between gap-3 border-b border-line/70 bg-ground/90 px-4 max-[999px]:static max-[999px]:shrink-0 max-[479px]:px-3">
       <div className="pointer-events-auto flex min-w-0 items-center gap-3">
@@ -227,6 +283,18 @@ function TopBar() {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className={clsx("btn flex items-center gap-1.5", exploring && "btn-active")}
+          onClick={() => setExploring(!exploring)}
+          aria-pressed={exploring}
+          title="Explore: hide the panels and move freely through the site (H)"
+        >
+          <Rotate3d size={13} aria-hidden /> <span className="max-[1279px]:hidden">Explore</span>
+        </button>
+        <button type="button" className="btn flex items-center gap-1.5" onClick={recenter} title="Recenter on the whole site (C)">
+          <Focus size={13} aria-hidden /> <span className="max-[1279px]:hidden">Recenter</span>
+        </button>
         <PlayPause />
       </div>
     </header>
@@ -247,10 +315,13 @@ function PlayPause() {
 
 /** Environment and platform in use, plus an honest note whenever the main view differs from what the camera sees. */
 function SiteTag() {
-  const { envId, platformId, view, thinning } = useFieldStore(useShallow((s) => ({ envId: s.envId, platformId: s.platformId, view: s.view, thinning: s.overviewThinning })));
+  const { envId, platformId, view, thinning, lampLevel } = useFieldStore(
+    useShallow((s) => ({ envId: s.envId, platformId: s.platformId, view: s.view, thinning: s.overviewThinning, lampLevel: ENVIRONMENT_LIBRARY[s.envId].light.source === "lamp" ? s.conditions.lighting : s.conditions.lamps })),
+  );
   const env = ENVIRONMENT_LIBRARY[envId];
   const lamp = env.light.source === "lamp";
   const pilot = view === "pilot";
+  const headlights = PLATFORMS[platformId].lamps.count > 0 && lampLevel > 0.01;
   return (
     <div data-field="site-tag" role="status" className="pointer-events-none absolute left-4 top-14 flex max-w-[calc(100%-380px)] flex-wrap items-start gap-1 max-[999px]:left-2 max-[999px]:max-w-[calc(100%-240px)] max-[759px]:max-w-[calc(100%-196px)]">
       <span className="sim-tag flex items-center gap-1.5 bg-ground/85 text-text">
@@ -265,6 +336,11 @@ function SiteTag() {
       {!pilot && lamp && (
         <span className="sim-tag bg-ground/85" data-testid="fill-tag">
           Overview lit by a dim fill. The vehicle camera sees only its lamps.
+        </span>
+      )}
+      {!pilot && headlights && (
+        <span className="sim-tag bg-ground/85" data-testid="headlight-tag">
+          Headlights drawn brighter here. The vehicle camera sees their true power.
         </span>
       )}
     </div>

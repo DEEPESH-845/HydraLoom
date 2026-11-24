@@ -7,13 +7,15 @@ import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { useFieldStore, type ViewMode } from "@/lib/field/store";
 import { ENVIRONMENT_LIBRARY } from "@/lib/world/environments";
+import { terrainHeight } from "@/lib/world/terrain";
 import type { FieldEnvironmentId } from "@/lib/world/schema";
 import type { PlatformId } from "@/lib/platforms";
 import { patchSceneWater, waterClock, waterTime, waterUniforms } from "@/components/lab/water";
 import { buildAssets } from "./assets";
-import { Disposables, FIELD_FEED_ELEMENT_ID, HUD_LAYER, VEHICLE_LAYER, WORLD_LAYER, measureFreeRect, prefersReducedMotion, setLayer, useDeferredDispose, type FreeRect } from "./common";
+import { Disposables, FIELD_FEED_ELEMENT_ID, HUD_LAYER, VEHICLE_LAYER, WORLD_LAYER, measureFreeRect, measureOverviewRect, prefersReducedMotion, setLayer, useDeferredDispose, type FreeRect } from "./common";
 import { applyPass, fieldFeedCam, fieldLights, fieldWaterBox, lampIntensity, placeLamps, poseCamera, rayToBed, site } from "./feed";
 import { FieldParticles } from "./FieldParticles";
+import { createHeadlights, type Headlights } from "./headlights";
 import { FlowField, RouteAndTrail, SiteOutline, flowProbe } from "./FieldHud";
 import { particleProbe } from "./FieldParticles";
 import { buildTarget, inertLabelTexture, placeTarget } from "./targets";
@@ -235,14 +237,21 @@ function Platform({ platform, baseY, envId }: { platform: PlatformId; baseY: num
 
 /* ---------- lights ---------- */
 
+/** Visible beams at the platform's lamp lights (main view only); updated by the passes right after the lamps move. */
+let headlights: Headlights | null = null;
+
 function Lights() {
   const scene = useThree((s) => s.scene);
   useEffect(() => {
     const L = fieldLights;
-    const objs = [L.sun, L.sun.target, L.hemi, L.fill, ...L.spots, ...L.spots.map((s) => s.target)];
+    const beams = createHeadlights(L.spots.length);
+    headlights = beams;
+    const objs = [L.sun, L.sun.target, L.hemi, L.fill, ...L.spots, ...L.spots.map((s) => s.target), beams.group];
     for (const o of objs) scene.add(o);
     return () => {
       for (const o of objs) scene.remove(o);
+      if (headlights === beams) headlights = null;
+      beams.dispose();
     };
   }, [scene]);
   return null;
@@ -251,12 +260,18 @@ function Lights() {
 /* ---------- camera rig ---------- */
 
 const MAIN_FOV = 45;
+/** Part of the canvas no panel covers: the follow view keeps the platform in it. */
 let free: FreeRect | null = null;
+/** Box centred on the window the overview and free views frame the site in. */
+let centred: FreeRect | null = null;
 
 function useFreeRect() {
+  const exploring = useFieldStore((s) => s.exploring);
   useEffect(() => {
     const update = () => {
-      free = measureFreeRect();
+      const exploring = useFieldStore.getState().exploring;
+      free = measureFreeRect(exploring);
+      centred = measureOverviewRect(exploring);
     };
     update();
     const ro = new ResizeObserver(update);
@@ -277,11 +292,25 @@ function useFreeRect() {
       ro.disconnect();
       window.removeEventListener("resize", update);
     };
-  }, []);
+  }, [exploring]);
 }
 
 /** Live camera access for tests and dev tools. */
 export const rigState = { controls: null as OrbitControlsImpl | null, view: "overview" as ViewMode, moving: false };
+
+/** Keys that glide the orbit pivot over the site in the overview and free views: [right, forward, up]. */
+const GLIDE_KEYS: Record<string, [number, number, number]> = {
+  ArrowLeft: [-1, 0, 0],
+  ArrowRight: [1, 0, 0],
+  ArrowUp: [0, 1, 0],
+  ArrowDown: [0, -1, 0],
+  PageUp: [0, 0, 1],
+  PageDown: [0, 0, -1],
+};
+/** Camera clearance above the seabed, m; the pivot itself may sit on the bed. */
+const BED_CLEARANCE = 0.4;
+/** How far past the site edge the pivot may roam, as a multiple of the half extent. */
+const ROAM = 1.15;
 
 interface Tween {
   from: THREE.Vector3;
@@ -302,12 +331,59 @@ function createRig(reduced: boolean) {
   // layout the last overview fit was made for; a panel or viewport change refits it
   let fitKey = "";
   const layoutKey = (width: number, height: number) => {
-    const r = free;
+    const r = centred;
     return r ? `${width}x${height}:${Math.round(r.x0)},${Math.round(r.y0)},${Math.round(r.x1)},${Math.round(r.y1)}` : `${width}x${height}`;
   };
   const desired = new THREE.Vector3();
   const look = new THREE.Vector3();
+  // view offset actually applied, eased toward the free rect so panels showing or hiding never jolt the picture
+  const offset = { x: 0, y: 0, ready: false };
+  // keyboard glide: held keys and the eased pivot velocity, m/s along [right, forward, up] of the camera heading
+  const glide = { held: new Set<string>(), vel: new THREE.Vector3(), want: new THREE.Vector3(), right: new THREE.Vector3(), fwd: new THREE.Vector3(), step: new THREE.Vector3() };
+  const shift = new THREE.Vector3();
+  /**
+   * Keeps the free camera in the site: the pivot inside the roam box and between the seabed and a little above the
+   * surface, the camera above the seabed. A pivot clamp moves the camera with it, so a clamp never rotates the view.
+   */
+  const confine = (camera: THREE.Camera, c: OrbitControlsImpl) => {
+    const env = useFieldStore.getState().engine.env;
+    const [ex, ez] = env.geometry.extentM;
+    const hx = (ex / 2) * ROAM;
+    const hz = (ez / 2) * ROAM;
+    const bed = (x: number, z: number) => terrainHeight(env.geometry.terrain, Math.max(-ex / 2, Math.min(ex / 2, x)), Math.max(-ez / 2, Math.min(ez / 2, z)));
+    const t = c.target;
+    const tx = Math.max(-hx, Math.min(hx, t.x));
+    const tz = Math.max(-hz, Math.min(hz, t.z));
+    const ty = Math.max(bed(tx, tz), Math.min(site.maxY + 6, t.y));
+    shift.set(tx - t.x, ty - t.y, tz - t.z);
+    if (shift.lengthSq() > 0) {
+      t.add(shift);
+      camera.position.add(shift);
+    }
+    const cp = camera.position;
+    // under the surface the camera stays inside the site, never in the cut-away terrain skirt around it
+    if (cp.y < 0) {
+      cp.x = Math.max(-ex / 2, Math.min(ex / 2, cp.x));
+      cp.z = Math.max(-ez / 2, Math.min(ez / 2, cp.z));
+    }
+    const floor = bed(cp.x, cp.z) + BED_CLEARANCE;
+    if (cp.y < floor) cp.y = floor;
+  };
   const rig = {
+    /** Arrow keys and PageUp/PageDown held down; the frame loop turns them into an eased glide. Returns whether the key is one. */
+    holdKey(key: string, down: boolean) {
+      if (!(key in GLIDE_KEYS)) return false;
+      if (down) glide.held.add(key);
+      else glide.held.delete(key);
+      return true;
+    },
+    releaseKeys() {
+      glide.held.clear();
+    },
+    /** A user orbit, pan, zoom or glide stops any programmatic move: the camera is theirs. */
+    cancelTween() {
+      tween = null;
+    },
     attach(c: OrbitControlsImpl | null) {
       controls = c;
       rigState.controls = c;
@@ -321,21 +397,21 @@ function createRig(reduced: boolean) {
         tween = null;
         return;
       }
-      tween = { from: camera.position.clone(), to, fromT: controls.target.clone(), toT, t: 0, dur: 0.9 };
+      tween = { from: camera.position.clone(), to, fromT: controls.target.clone(), toT, t: 0, dur: 0.7 };
     },
     /** Fits the whole site into the part of the canvas no panel covers. */
     fitOverview(camera: THREE.Camera, width: number, height: number, instant: boolean) {
       const env = useFieldStore.getState().engine.env;
       const [ex, ez] = env.geometry.extentM;
       const target = new THREE.Vector3(0, (site.minY + site.maxY) / 2, 0);
-      const r = free ?? { x0: 0, y0: 0, x1: width, y1: height };
+      const r = centred ?? { x0: 0, y0: 0, x1: width, y1: height };
       const fh = Math.max(80, r.y1 - r.y0) / height;
       const fw = Math.max(80, r.x1 - r.x0) / width;
       const dir = new THREE.Vector3(0.42, 0.78, 1).normalize();
       const radius = 0.5 * Math.hypot(ex, ez * 0.75, site.maxY - site.minY + 2);
       const tanV = Math.tan((MAIN_FOV * Math.PI) / 360);
       const tanH = tanV * (width / height);
-      const dist = (radius * 0.8) / Math.min(tanV * fh, tanH * fw);
+      const dist = radius / Math.min(tanV * fh, tanH * fw);
       fitKey = layoutKey(width, height);
       rig.moveTo(camera, target.clone().addScaledVector(dir, dist), target, instant);
     },
@@ -359,12 +435,19 @@ function createRig(reduced: boolean) {
       const v = s.view;
       const c = controls;
       rigState.moving = !!tween;
+      const orbiting = v === "overview" || v === "free";
       if (c) {
-        c.enabled = v === "overview" || v === "free";
-        c.enablePan = v === "free";
+        c.enabled = orbiting;
+        // pan and zoom toward the cursor in both orbit views; the first gesture hands the camera to the free view
+        c.enablePan = orbiting;
+        c.zoomToCursor = orbiting;
+        c.screenSpacePanning = true;
+        // below the horizon is allowed (look up at a hull or a pier from the bed); confine() keeps the camera above it
+        c.maxPolarAngle = Math.PI * 0.94;
         c.enableDamping = !reduced;
-        c.dampingFactor = 1 - Math.pow(1 - 0.08, Math.min(4, dt * 60));
+        c.dampingFactor = 1 - Math.pow(1 - 0.14, Math.min(4, dt * 60));
       }
+      if (!orbiting) glide.vel.set(0, 0, 0);
       if (v === "pilot") {
         // through the platform camera itself: same pose and vertical field of view, canvas aspect
         const pose = engine.cameraPose(true);
@@ -402,6 +485,37 @@ function createRig(reduced: boolean) {
         viewState.distance = camera.position.distanceTo(look);
       } else if (c) {
         if (v === "overview" && fitKey && layoutKey(width, height) !== fitKey) rig.fitOverview(camera, width, height, false);
+        // keyboard glide: pivot and camera translate together, at a speed scaled to the view distance
+        let ix = 0;
+        let iy = 0;
+        let iz = 0;
+        for (const k of glide.held) {
+          const g = GLIDE_KEYS[k];
+          ix += g[0];
+          iy += g[1];
+          iz += g[2];
+        }
+        if (ix || iy || iz) {
+          tween = null;
+          if (v === "overview") useFieldStore.getState().setView("free");
+        }
+        const speed = Math.max(1.5, camera.position.distanceTo(c.target) * 0.7);
+        const kv = reduced ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) * 8);
+        glide.vel.lerp(glide.want.set(ix, iy, iz).normalize().multiplyScalar(speed), kv);
+        if (glide.vel.lengthSq() > 1e-6) {
+          glide.fwd.subVectors(c.target, camera.position).setY(0);
+          if (glide.fwd.lengthSq() < 1e-8) glide.fwd.set(0, 0, -1).applyQuaternion(camera.quaternion).setY(0);
+          glide.fwd.normalize();
+          glide.right.set(-glide.fwd.z, 0, glide.fwd.x);
+          glide.step
+            .copy(glide.right)
+            .multiplyScalar(glide.vel.x)
+            .addScaledVector(glide.fwd, glide.vel.y)
+            .addScaledVector(THREE.Object3D.DEFAULT_UP, glide.vel.z)
+            .multiplyScalar(Math.min(dt, 0.1));
+          camera.position.add(glide.step);
+          c.target.add(glide.step);
+        } else glide.vel.set(0, 0, 0);
         if (tween) {
           tween.t = Math.min(1, tween.t + dt / tween.dur);
           const e = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
@@ -410,13 +524,25 @@ function createRig(reduced: boolean) {
           if (tween.t >= 1) tween = null;
         }
         c.update();
+        if (!tween) confine(camera, c);
         viewState.focus.copy(c.target);
         viewState.distance = camera.position.distanceTo(c.target);
       }
-      // centre the projection in the part of the canvas no panel covers
-      const r = free;
-      if (r && width > 0) camera.setViewOffset(width, height, width / 2 - (r.x0 + r.x1) / 2, height / 2 - (r.y0 + r.y1) / 2, width, height);
-      else camera.clearViewOffset();
+      // overview and free: the site sits in the middle of the window; follow: the platform sits where no panel covers it
+      const r = orbiting ? centred : free;
+      if (r && width > 0) {
+        const ox = width / 2 - (r.x0 + r.x1) / 2;
+        const oy = height / 2 - (r.y0 + r.y1) / 2;
+        const ko = !offset.ready || reduced ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) * 7);
+        offset.x += (ox - offset.x) * ko;
+        offset.y += (oy - offset.y) * ko;
+        if (Math.abs(ox - offset.x) + Math.abs(oy - offset.y) < 0.05) {
+          offset.x = ox;
+          offset.y = oy;
+        }
+        offset.ready = true;
+        camera.setViewOffset(width, height, offset.x, offset.y, width, height);
+      } else camera.clearViewOffset();
       // near and far follow the distance so the depth buffer keeps its precision on a 240 m site
       const dist = viewState.distance;
       camera.near = Math.max(0.03, Math.min(2, dist * 0.004));
@@ -433,6 +559,7 @@ function CameraRig() {
   const view = useFieldStore((s) => s.view);
   const envId = useFieldStore((s) => s.envId);
   const worldReady = useFieldStore((s) => s.worldReady);
+  const viewEpoch = useFieldStore((s) => s.viewEpoch);
   const rig = useMemo(() => createRig(prefersReducedMotion()), []);
   useFreeRect();
 
@@ -444,7 +571,45 @@ function CameraRig() {
   useEffect(() => {
     rigState.view = view;
     if (view === "overview") rig.fitOverview(camera, size.width, size.height, !worldReady);
-  }, [rig, camera, view, envId, worldReady, size.width, size.height]);
+  }, [rig, camera, view, envId, worldReady, size.width, size.height, viewEpoch]);
+
+  // The first orbit, pan or zoom in the overview hands the camera to the free view, so a later layout refit of the
+  // overview never pulls it back; any gesture also stops a programmatic move that is still running.
+  useEffect(() => {
+    const c = controls.current;
+    if (!c) return;
+    const onStart = () => {
+      rig.cancelTween();
+      const s = useFieldStore.getState();
+      if (s.view === "overview") s.setView("free");
+    };
+    c.addEventListener("start", onStart);
+    return () => c.removeEventListener("start", onStart);
+  }, [rig]);
+
+  // Arrow keys glide the pivot over the site, PageUp and PageDown raise and lower it. Fields and sliders keep their keys.
+  useEffect(() => {
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.getAttribute("role") === "slider");
+    const down = (e: KeyboardEvent) => {
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const v = useFieldStore.getState().view;
+      if (v !== "overview" && v !== "free") return;
+      if (rig.holdKey(e.key, true)) e.preventDefault();
+    };
+    const up = (e: KeyboardEvent) => {
+      rig.holdKey(e.key, false);
+    };
+    const blur = () => rig.releaseKeys();
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, [rig]);
 
   useEffect(() => {
     const el = gl.domElement;
@@ -458,10 +623,38 @@ function CameraRig() {
 
   useFrame((state, dt) => rig.frame(state.camera as THREE.PerspectiveCamera, state.size.width, state.size.height, dt), -0.5);
 
-  return <OrbitControls ref={controls} makeDefault enableDamping minDistance={1} maxDistance={900} maxPolarAngle={Math.PI * 0.49} zoomSpeed={0.9} rotateSpeed={0.6} />;
+  return <OrbitControls ref={controls} makeDefault enableDamping minDistance={0.6} maxDistance={900} zoomSpeed={1.1} rotateSpeed={0.75} panSpeed={1} />;
 }
 
 /* ---------- render passes ---------- */
+
+/** How much brighter the platform's lamps are drawn in the main view (not the pilot view, never the camera feed). */
+export const HEADLIGHT_AID = { lamp: 6, daylight: 4 };
+
+/**
+ * The sun's shadow map only changes when the site changes or a drifting target moves, and it is not used at all where
+ * the sun is off (the lamp-lit deep). Redrawing it, a second pass over every caster, each frame cost as much as the
+ * view itself; it is redrawn at 10 Hz while the sun is up and for a few frames on a world or light change.
+ */
+const SHADOW_HZ = 10;
+const shadowClock = { env: "", sun: false, last: -Infinity, settle: 0 };
+function shadowDue(envId: string, now: number): boolean {
+  const sun = fieldLights.sun.intensity > 0;
+  const c = shadowClock;
+  if (envId !== c.env || sun !== c.sun) {
+    c.env = envId;
+    c.sun = sun;
+    // a new world settles (targets placed, shadow camera fitted) over its first frames
+    c.settle = 8;
+  }
+  // the settle frames draw it even with the sun off: the map must exist, or every lit shader samples an unbound texture
+  if (c.settle > 0 || (sun && (now - c.last >= 1 / SHADOW_HZ || now < c.last))) {
+    c.settle = Math.max(0, c.settle - 1);
+    c.last = now;
+    return true;
+  }
+  return false;
+}
 
 interface FeedRect {
   el: HTMLElement | null;
@@ -509,6 +702,10 @@ function Passes() {
     const feedDist = altitudeHit ?? Math.min(60, engine.visibility() * 1.5);
     const bedAhead = pose.position[1] + pose.forward[1] * feedDist;
     placeLamps(engine, rp as { position: [number, number, number]; attitude: [number, number, number, number] }, pose, 0, lampIntensity(engine, pose.position[1]));
+    if (headlights) {
+      const level = engine.env.light.source === "lamp" ? engine.conditions.lighting : engine.conditions.lamps;
+      headlights.update(engine, fieldLights.spots, level, Math.max(0, Math.min(1, 1 - engine.visibility() / 15)));
+    }
 
     // MAIN PASS
     const pilot = s.view === "pilot";
@@ -529,17 +726,25 @@ function Passes() {
     const mainBg = new THREE.Color("#0b1219");
     scene.background = (mainUnder && s.view === "follow") || pilot ? mainPass.background.clone() : mainBg;
     gl.shadowMap.autoUpdate = false;
-    gl.shadowMap.needsUpdate = true;
+    gl.shadowMap.needsUpdate = shadowDue(engine.env.id, state.clock.elapsedTime);
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);
     waterUniforms.uWaterViewportH.value = fullH;
+    // headlight aid: outside the pilot view the lamps compete with the overview's daylight or fill, so they are drawn
+    // brighter there (labelled in the UI); the platform camera below sees their true power
+    const aid = pilot ? 1 : lampEnv ? HEADLIGHT_AID.lamp : HEADLIGHT_AID.daylight;
+    for (const sp of fieldLights.spots) sp.intensity *= aid;
     gl.render(scene, camera);
+    for (const sp of fieldLights.spots) sp.intensity /= aid;
     fieldStats.mainCalls = gl.info.render.calls;
     fieldStats.triangles = gl.info.render.triangles;
     fieldStats.calls = fieldStats.mainCalls;
     scene.background = bg;
 
+    fieldStats.feedCalls = 0;
     if (passControl.captureActive) return;
+    // Explore hides the panels with visibility, which keeps the feed rect in layout; the feed must go with them.
+    if (s.exploring) return;
     // FEED PASS into the DOM rect
     const f = feed.current;
     if (!f.el || !f.el.isConnected) {
@@ -586,6 +791,48 @@ function Passes() {
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);
   }, 1);
+  return null;
+}
+
+/* ---------- adaptive resolution ---------- */
+
+/** Pixel ratio steps the view may use; the top one is the display's own ratio, capped at 1.5. */
+const DPR_MIN = 0.75;
+const DPR_STEP = 0.25;
+
+/**
+ * Keeps the view at the display frame rate on a weak or busy GPU: when frames run long for a second, the canvas
+ * renders fewer pixels; when they are short again for a few seconds, it steps back up. A step that had to be undone
+ * holds the ratio down for a while, so it never oscillates.
+ */
+function AdaptiveResolution() {
+  const setDpr = useThree((s) => s.setDpr);
+  const st = useRef({ t: 0, n: 0, calm: 0, hold: 0, raisedAt: -Infinity });
+  useFrame((state, dt) => {
+    // a hidden tab, a world switch or a debugger pause is not the renderer being slow
+    if (dt > 0.25 || !useFieldStore.getState().worldReady) return;
+    const s = st.current;
+    s.t += dt;
+    s.n++;
+    if (s.t < 1) return;
+    const ms = (s.t / s.n) * 1000;
+    s.t = 0;
+    s.n = 0;
+    const now = state.clock.elapsedTime;
+    const max = Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = state.viewport.dpr;
+    if (ms > 22 && dpr > DPR_MIN) {
+      if (now - s.raisedAt < 4) s.hold = now + 30;
+      s.calm = 0;
+      setDpr(Math.max(DPR_MIN, dpr - DPR_STEP));
+    } else if (ms < 18.5 && dpr < max && now > s.hold) {
+      if (++s.calm >= 3) {
+        s.calm = 0;
+        s.raisedAt = now;
+        setDpr(Math.min(max, dpr + DPR_STEP));
+      }
+    } else s.calm = 0;
+  });
   return null;
 }
 
@@ -637,6 +884,7 @@ export function FieldScene() {
       <Lights />
       <World />
       <Passes />
+      <AdaptiveResolution />
       <DevHooks />
     </Canvas>
   );

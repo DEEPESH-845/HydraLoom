@@ -166,11 +166,14 @@ const rectOf = (name: string) => {
  * The part of the canvas no panel covers. Desktop: right of the left edge, under the header, left of the right column,
  * above the bottom card. Compact (below 1000 px): the band between the header and the workspace strip.
  */
-export function measureFreeRect(): FreeRect | null {
+export function measureFreeRect(exploring = false): FreeRect | null {
   if (typeof window === "undefined") return null;
   const W = window.innerWidth;
   const H = window.innerHeight;
   const header = rectOf("header");
+  // exploring: the panels are hidden (visibility only, so they keep their boxes); the site gets the whole window
+  // below the header, minus the explore hint strip at the bottom
+  if (exploring) return { x0: 16, y0: (header?.bottom ?? 48) + 16, x1: W - 16, y1: H - 72 };
   const column = rectOf("column");
   const card = rectOf("card");
   const nav = rectOf("nav");
@@ -185,6 +188,23 @@ export function measureFreeRect(): FreeRect | null {
     x1: (column?.left ?? W - 340) - 16,
     y1: Math.max((header?.bottom ?? 48) + 120, (card?.top ?? H - 300) - 12),
   };
+}
+
+/**
+ * The box the overview (and the free view that grows out of it) frames the site in: centred on the window's vertical
+ * axis, so the site sits in the middle of the screen, and as wide as the gap the right column leaves on both sides.
+ * Below 1000 px, and while exploring, it is the free rect: there the panels are stacked or hidden.
+ */
+export function measureOverviewRect(exploring = false): FreeRect | null {
+  if (typeof window === "undefined") return null;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  if (exploring || W < 1000) return measureFreeRect(exploring);
+  const header = rectOf("header");
+  const column = rectOf("column");
+  const inset = Math.max(16, W - (column?.left ?? W - 356) + 16);
+  const y0 = (header?.bottom ?? 48) + 16;
+  return { x0: inset, y0, x1: W - inset, y1: Math.max(y0 + 120, H - 16) };
 }
 
 const pendingDispose = new Map<object, number>();
