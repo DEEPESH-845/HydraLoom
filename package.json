@@ -11,7 +11,8 @@
     "test:unit": "tsx --test \"lib/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
-    "e2e:update": "playwright test --update-snapshots"
+    "e2e:update": "playwright test --update-snapshots",
+    "backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backend.ps1"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
