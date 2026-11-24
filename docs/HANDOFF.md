@@ -144,6 +144,16 @@ Every defect below was reproduced in a real-GPU Chromium before it was fixed, an
 - Tests: `Lab.settleCamera()` polls from Node (a `waitForFunction` predicate returning a Promise is truthy at once and never waited); screenshot and detection specs wait on it; the responsive spec waits for the swapped card. Full suite 42 passed, screenshots 21 of 21 over three repeats, `npm run build` clean.
 - Header: new buttons collapse to icons at narrow widths so the brand is never clipped (it was clipped at 1024 and 390 px); the 176 px feed header drops its title so the position readout no longer overflows.
 
+### Bug audit and free-exploration pass (2026-11-24)
+
+Every defect is listed with its reproduction, root cause and regression test in `docs/BUG_AUDIT.md`; verification results are in `docs/QA_REPORT.md`.
+- Field sites are freely explorable: pan and zoom toward the cursor in the overview, the first gesture hands the camera to the free view (a layout refit no longer pulls it back), arrow keys glide the pivot and PageUp/PageDown raise it, the camera may look up from the seabed but never enters it or the terrain skirt, the pivot stays within 1.15 half-extents of the site.
+- Field explore mode: `EXPLORE` / `H` hides the panels and the feed pass, `Esc` or `Done` brings them back, `RECENTER` / `C` returns to the overview fit; the projection offset eases so panels showing or hiding never jolt the picture; switching site from the free view reopens the new site's overview.
+- Lab explore: a pan (right button, modifier + left, two fingers) ends the explore glide, which used to pull the pivot straight back.
+- Lab environment switches release the previous dressing's geometries and materials (`useDisposeAll` in `TankDressing.tsx`) and the particle cloud no longer rebuilds per environment (its drift is a uniform); `window.__labStats` reports `geometries`, `textures` and `programs`.
+- The lab dataset capture passes its sweep conditions straight to `labWater` / `labFeedPass`; it never writes the live scenario.
+- Legacy backend (`main.py`, `serial_bridge.py`, `hal/broker.py`): a port that fails to open is reported as such, one reader per port, reconnect on read failure, stale packets served as offline, non-object JSON ignored, malformed `/ws/command` messages answered with `{"type": "ERROR"}` instead of closing the socket, unknown modes and non-finite PWM rejected, the physics thread survives a bad step, `SENSOR_LOSS` affects depth and restores the baseline noise.
+
 ## 7. Known limitations and open items
 
 - Preset E is a below-waterline housing shot (art audit); the original "engineering close-up of the carriage" is reachable by orbiting from E, not a preset.

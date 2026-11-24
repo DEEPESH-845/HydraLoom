@@ -1,0 +1,303 @@
+import { expect, test } from "./field";
+
+/*
+ * Field workspace (/field): open-water environments, platforms, water current, particles, missions, the platform
+ * camera's projection and the synthetic dataset capture. State is read through the dev-only window.__fieldStore hook;
+ * actions go through the UI unless a test needs an exact pose.
+ */
+
+const ENVS = ["harbor", "river", "deepsea", "reef", "lake", "ocean"] as const;
+
+
+test("boots without console errors and shows the workspace", async ({ page, field, audit }) => {
+  await field.open();
+  await expect(page.getByText("GANTRYLAB", { exact: true })).toBeVisible();
+  await expect(page.locator("#field-camera-feed")).toBeVisible();
+  for (const name of ["01 Environment", "02 Platform", "03 Simulation", "04 Model Lab", "05 Analysis", "06 Reports"]) await expect(page.getByLabel(name).first()).toBeAttached();
+  const stats = await page.evaluate(() => window.__fieldStats!);
+  expect(stats.mainCalls).toBeGreaterThan(5);
+  expect(stats.calls).toBeLessThan(300);
+  expect(audit.warnings).toEqual([]);
+});
+
+test("no gantry, rail or beam exists in any field environment and the lab is not mounted", async ({ page, field }) => {
+  await field.open();
+  for (const env of ENVS) {
+    await page.locator(`button[data-env="${env}"]`).click();
+    await field.waitWorld(env);
+    const bad = await page.evaluate(() => {
+      const scene = (window as unknown as { __fieldScene: import("three").Scene }).__fieldScene;
+      const names: string[] = [];
+      scene.traverse((o) => {
+        if (/gantry|rail|beam|carriage/i.test(o.name)) names.push(o.name);
+      });
+      return names;
+    });
+    expect(bad, env).toEqual([]);
+    expect(await page.evaluate(() => "__labStore" in window)).toBe(false);
+  }
+});
+
+test("switches through all six environments, each with its own site", async ({ page, field }) => {
+  await field.open();
+  for (const env of ENVS) {
+    await page.locator(`button[data-env="${env}"]`).click();
+    await field.waitWorld(env);
+    const info = await page.evaluate(() => {
+      const scene = (window as unknown as { __fieldScene: import("three").Scene }).__fieldScene;
+      const sites: string[] = [];
+      let targets = 0;
+      let seabed = 0;
+      scene.traverse((o) => {
+        if (o.name.startsWith("field-site-")) sites.push(o.name);
+        if (o.userData.gtId) targets++;
+        if (o.name === "seabed") seabed++;
+      });
+      return { sites, targets, seabed };
+    });
+    expect(info.sites).toEqual([`field-site-${env}`]);
+    expect(info.seabed).toBe(1);
+    expect(info.targets).toBe(await field.state((s) => s.engine.targets.length));
+    expect(await page.evaluate(() => window.__fieldStats!.calls)).toBeLessThan(300);
+  }
+});
+
+test("platform compatibility is respected", async ({ page, field }) => {
+  await field.open("harbor", "rov");
+  await field.workspace("02").click();
+  const auv = page.locator('button[data-platform="auv"]');
+  await expect(auv).toBeDisabled();
+  await expect(auv).toContainText(/too confined/i);
+  await auv.click({ force: true }).catch(() => {});
+  expect(await field.state((s) => s.platformId)).toBe("rov");
+  await field.workspace("01").click();
+  await page.locator('button[data-env="ocean"]').click();
+  await field.waitWorld("ocean");
+  await field.workspace("02").click();
+  await page.locator('button[data-platform="auv"]').click();
+  await field.waitFor((s) => s.platformId === "auv" && s.worldReady);
+  await page.locator('button[data-platform="station"]').click();
+  await field.waitFor((s) => s.platformId === "station" && s.worldReady);
+  expect(await field.state((s) => s.engine.vehicle === null)).toBe(true);
+});
+
+test("current controls change the engine's current and the flow arrows", async ({ page, field }) => {
+  await field.open("harbor");
+  const speed = page.getByTestId("current-speed");
+  await speed.fill("0.9");
+  await page.getByTestId("current-dir").fill("200");
+  await field.waitFor((s) => Math.abs(s.conditions.current.speedMps - 0.9) < 1e-6 && Math.abs(s.conditions.current.headingDeg - 200) < 1e-6);
+  expect(await field.state((s) => s.engine.current.config.speedMps)).toBeCloseTo(0.9, 6);
+  // the arrows refresh four times per second from the same field
+  await page.waitForFunction(() => {
+    const f = (window as unknown as { __fieldFlow: { heading: number; meanSpeed: number; meanDir: number[] } }).__fieldFlow;
+    return Math.abs(f.heading - 200) < 1e-6 && f.meanSpeed > 0.3;
+  });
+  const dir = await page.evaluate(() => (window as unknown as { __fieldFlow: { meanDir: number[] } }).__fieldFlow.meanDir);
+  const heading = ((Math.atan2(dir[0], -dir[2]) * 180) / Math.PI + 360) % 360;
+  expect(Math.abs(((heading - 200 + 540) % 360) - 180)).toBeLessThan(15);
+  // the dial is keyboard operable
+  await page.getByTestId("current-dial").focus();
+  await page.keyboard.press("ArrowRight");
+  await field.waitFor((s) => Math.abs(s.conditions.current.headingDeg - 205) < 1e-6);
+});
+
+test("particles move with the water along the configured heading", async ({ page, field }) => {
+  await field.open("harbor");
+  await page.evaluate(() => window.__fieldStore!.getState().setConditions({ current: { speedMps: 0.5, headingDeg: 60, turbulence: 0.02, variability: 0, verticalMps: 0 } }));
+  await page.evaluate(() => (window as unknown as { __fieldParticles: { reset: () => void } }).__fieldParticles.reset());
+  // let a few seconds of simulated time pass in the live loop
+  const t0 = await field.state((s) => s.engine.time);
+  await field.waitFor((s, t) => s.engine.time > t + 3, t0, 120_000);
+  const travel = await page.evaluate(() => (window as unknown as { __fieldParticles: { travel: number[] } }).__fieldParticles.travel);
+  const h = Math.hypot(travel[0], travel[2]);
+  expect(h).toBeGreaterThan(0.2);
+  const heading = ((Math.atan2(travel[0], -travel[2]) * 180) / Math.PI + 360) % 360;
+  expect(Math.abs(((heading - 60 + 540) % 360) - 180)).toBeLessThan(25);
+});
+
+test("ROV manual surge moves the vehicle forward", async ({ page, field }) => {
+  await field.open("harbor", "rov");
+  await page.evaluate(() => window.__fieldStore!.getState().setConditions({ current: { speedMps: 0 } }));
+  const x0 = await field.state((s) => s.engine.vehicle!.position[0]);
+  await page.locator("canvas").click({ position: { x: 600, y: 200 } });
+  await page.keyboard.down("w");
+  const t0 = await field.state((s) => s.engine.time);
+  await field.waitFor((s, t) => s.engine.time > t + 4, t0, 120_000);
+  await page.keyboard.up("w");
+  const r = await field.state((s) => ({ x: s.engine.vehicle!.position[0], mode: s.engine.pilotTarget.mode, stick: s.engine.pilotTarget.stick.surge }));
+  expect(r.mode).toBe("MANUAL");
+  expect(r.stick).toBe(0);
+  // heading 090: forward is east (+x)
+  expect(r.x - x0).toBeGreaterThan(0.5);
+});
+
+test("a mission starts and progresses", async ({ page, field }) => {
+  await field.open("harbor", "rov");
+  await field.workspace("03").click();
+  await page.getByRole("button", { name: /start mission/i }).click();
+  await field.waitFor((s) => s.phase === "RUNNING");
+  expect(await field.state((s) => s.engine.route().length)).toBeGreaterThan(1);
+  const d0 = await field.state((s) => s.telemetry.pilot.distanceM);
+  await field.fastForward(40);
+  const r = await field.state((s) => ({ wp: s.telemetry.pilot.waypoint, d: s.telemetry.pilot.distanceM, phase: s.phase, events: s.events.map((e) => e.kind) }));
+  expect(r.wp > 0 || r.d < d0 - 1).toBe(true);
+  expect(r.events).toContain("MISSION");
+  await page.getByRole("button", { name: /abort/i }).click();
+  await field.waitFor((s) => s.phase === "COMPLETE" && !!s.result);
+  await field.workspace("05").click();
+  await expect(page.getByTestId("result")).toContainText("Targets found");
+});
+
+/** Puts the ROV 2.6 m west of a target, level, heading east, holding station, with the simulation paused. */
+async function faceTarget(page: import("@playwright/test").Page, id: string, back = 2.6, up = 1.2) {
+  await page.evaluate(
+    ({ id, back, up }) => {
+      const s = window.__fieldStore!.getState();
+      const e = s.engine;
+      e.setConditions({ current: { speedMps: 0 } });
+      const t = e.targets.find((x) => x.id === id)!;
+      const v = e.vehicle!;
+      v.position = [t.position[0] - back, t.position[1] + up, t.position[2]];
+      v.attitude = [0, 0, 0, 1];
+      v.velocity = [0, 0, 0];
+      v.angularVelocity = [0, 0, 0];
+      e.setPilotMode("HOLD");
+      e.tick(1 / 60);
+      e.paused = true;
+      s.publish();
+    },
+    { id, back, up },
+  );
+  await page.waitForTimeout(300);
+}
+
+test("the analytic projection of a target matches its rendered instance-id box", async ({ page, field }) => {
+  await field.open("harbor", "rov");
+  for (const id of ["crate-h1", "mine-h1"]) {
+    await faceTarget(page, id);
+    const p = await page.evaluate((id) => (window as unknown as { __fieldProbe: (id: string) => { rendered: number[] | null; pixels: number; analyticModel: number[] | null; analyticDeclared: number[] | null } }).__fieldProbe(id), id);
+    expect(p.pixels, id).toBeGreaterThan(500);
+    const r = p.rendered!;
+    const a = p.analyticModel!;
+    // a mesh's projected silhouette lies inside the projection of its bounding box and touches it on at least the
+    // nearest edges; for a box-shaped crate every edge coincides
+    const edges = [r[0] - a[0], r[1] - a[1], r[0] + r[2] - (a[0] + a[2]), r[1] + r[3] - (a[1] + a[3])];
+    if (id === "crate-h1") for (const e of edges) expect(Math.abs(e), `${id} ${edges}`).toBeLessThan(3);
+    else {
+      expect(edges[0]).toBeGreaterThan(-3);
+      expect(edges[1]).toBeGreaterThan(-3);
+      expect(edges[2]).toBeLessThan(3);
+      expect(edges[3]).toBeLessThan(3);
+    }
+    // the crate fills its declared box, so the engine's box (what the detector projects) lands on it too
+    if (id === "crate-h1") {
+      const d = p.analyticDeclared!;
+      expect(Math.abs(r[0] + r[2] / 2 - (d[0] + d[2] / 2))).toBeLessThan(3);
+      expect(Math.abs(r[1] + r[3] / 2 - (d[1] + d[3] / 2))).toBeLessThan(3);
+    }
+  }
+});
+
+test("dataset capture produces annotated frames matching the analytic projection and uploads them", async ({ page, field }) => {
+  let posted: { manifest: string | null; files: number } | null = null;
+  await page.route("**/api/v1/datasets", async (route) => {
+    const body = route.request().postDataBuffer()?.toString("latin1") ?? "";
+    posted = { manifest: /name="manifest"/.test(body) ? "yes" : null, files: (body.match(/name="files"; filename="\d{6}\.png"/g) ?? []).length };
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: "ds_test", n_frames: 3 }) });
+  });
+  await field.open("harbor", "rov");
+  await faceTarget(page, "crate-h1", 3.2, 1.3);
+  await field.workspace("05").click();
+  await page.getByTestId("capture-frames").fill("3");
+  await page.getByRole("button", { name: /^capture$/i }).click();
+  await expect(page.getByTestId("capture-status")).toContainText(/Stored by the backend as ds_test/, { timeout: 120_000 });
+  expect(posted).toEqual({ manifest: "yes", files: 3 });
+  const cap = await page.evaluate(() => {
+    const c = (window as unknown as { __fieldCapture: { manifest: unknown; frames: { frame: { annotations: { object_id: string; bbox_xywh: number[] }[] }; analytic: Record<string, number[]>; png: Blob }[] } }).__fieldCapture;
+    return { manifest: c.manifest, frames: c.frames.map((f) => ({ analytic: f.analytic, annotations: f.frame.annotations, png: f.png.size, type: f.png.type })) };
+  });
+  const m = cap.manifest as { schema: string; seed: number; classes: string[]; generator: { app: string }; frames: { file: string; width: number; height: number; camera: { fx: number; hfov_deg: number }; conditions: Record<string, unknown> }[] };
+  expect(m.schema).toBe("gantrylab.dataset/1");
+  expect(m.generator.app).toBe("gantrylab-web");
+  expect(m.classes).toEqual(["SHIPWRECK", "MINE", "DEBRIS", "TIRE", "PIPELINE"]);
+  expect(m.frames.map((f) => f.file)).toEqual(["000001.png", "000002.png", "000003.png"]);
+  expect(m.frames[0].width).toBe(640);
+  expect(m.frames[0].height).toBe(360);
+  expect(m.frames[0].camera.fx).toBeCloseTo(320 / Math.tan((80 * Math.PI) / 360), 2);
+  expect(m.frames[0].conditions.environment).toBe("harbor");
+  const crate = cap.frames[0].annotations.find((a) => a.object_id === "crate-h1");
+  expect(crate, "crate annotated in the first (unjittered) frame").toBeTruthy();
+  for (const f of cap.frames) {
+    expect(f.type).toBe("image/png");
+    expect(f.png).toBeGreaterThan(5000);
+    for (const a of f.annotations) {
+      const an = f.analytic[a.object_id];
+      expect(an, a.object_id).toBeTruthy();
+      const [x, y, w, h] = a.bbox_xywh;
+      // visible pixels lie inside the analytic box of the model (occlusion and the frame edge only shrink them)
+      expect(x).toBeGreaterThanOrEqual(Math.max(0, an[0]) - 3);
+      expect(y).toBeGreaterThanOrEqual(Math.max(0, an[1]) - 3);
+      expect(x + w).toBeLessThanOrEqual(Math.min(640, an[0] + an[2]) + 3);
+      expect(y + h).toBeLessThanOrEqual(Math.min(360, an[1] + an[3]) + 3);
+    }
+  }
+  // the unoccluded crate in the first frame fills its analytic box to within a few pixels on the top and sides
+  const an = cap.frames[0].analytic["crate-h1"];
+  const b = crate!.bbox_xywh;
+  expect(Math.abs(b[0] - an[0])).toBeLessThan(4);
+  expect(Math.abs(b[0] + b[2] - (an[0] + an[2]))).toBeLessThan(4);
+  expect(Math.abs(b[1] - an[1])).toBeLessThan(4);
+});
+
+test("capture reports an unreachable backend and still allows saving the manifest", async ({ page, field }) => {
+  await page.route("**/api/v1/datasets", (route) => route.abort("connectionrefused"));
+  await field.open("reef", "rov");
+  await field.workspace("05").click();
+  await page.getByTestId("capture-frames").fill("1");
+  await page.getByRole("button", { name: /^capture$/i }).click();
+  await expect(page.getByTestId("capture-upload-error")).toContainText(/not reachable/i, { timeout: 120_000 });
+  await expect(page.getByRole("button", { name: /save manifest/i })).toBeVisible();
+});
+
+for (const vp of [
+  { width: 390, height: 844 },
+  { width: 1280, height: 720 },
+]) {
+  test(`responsive at ${vp.width}x${vp.height}: no overflow and no overlapping panels`, async ({ page, field }) => {
+    await page.setViewportSize(vp);
+    await field.open("harbor", "rov");
+    for (const ws of ["01", "02", "03", "05"]) {
+      await field.workspace(ws).click();
+      const id = { "01": "environment", "02": "platform", "03": "simulation", "05": "analysis" }[ws]!;
+      await expect(page.getByTestId(`card-${id}`)).toBeVisible();
+      await page.waitForTimeout(400);
+      const r = await page.evaluate(() => {
+        const names = ["header", "column", "card", "nav", "site-tag", "compass"];
+        const rects = names
+          .map((n) => {
+            const el = document.querySelector(`[data-field="${n}"]`) as HTMLElement | null;
+            if (!el) return null;
+            const b = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            if (b.width === 0 || b.height === 0 || cs.display === "none" || cs.visibility === "hidden") return null;
+            return { n, x0: b.left, y0: b.top, x1: b.right, y1: b.bottom };
+          })
+          .filter(Boolean) as { n: string; x0: number; y0: number; x1: number; y1: number }[];
+        const overlaps: string[] = [];
+        for (let i = 0; i < rects.length; i++)
+          for (let j = i + 1; j < rects.length; j++) {
+            const a = rects[i];
+            const b = rects[j];
+            if (Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 1 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 1) overlaps.push(`${a.n}/${b.n}`);
+          }
+        const outside = rects.filter((q) => q.x0 < -1 || q.x1 > window.innerWidth + 1 || q.y1 > window.innerHeight + 1).map((q) => q.n);
+        return { overlaps, outside, scrollW: document.documentElement.scrollWidth, w: window.innerWidth };
+      });
+      expect(r.overlaps, ws).toEqual([]);
+      expect(r.outside, ws).toEqual([]);
+      expect(r.scrollW).toBeLessThanOrEqual(r.w);
+    }
+    await page.screenshot({ path: `e2e/.results/field/responsive-${vp.width}x${vp.height}.png` });
+  });
+}

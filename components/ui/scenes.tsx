@@ -2,13 +2,16 @@
 
 import clsx from "clsx";
 import { Home, Play, RotateCcw, Square } from "lucide-react";
-import { useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { GANTRY, TEST } from "@/lib/sim/constants";
+import { GANTRY } from "@/lib/sim/constants";
 import { useSimStore, type ComponentId } from "@/lib/sim/store";
 import { ACTIONS, type Action, type TestResult } from "@/lib/sim/types";
 import { visibilityRange, waterOptics } from "@/lib/optics/water";
 import { ENVIRONMENT_IDS, ENVIRONMENTS, environmentNtu, environmentWater, type Environment, type EnvironmentId } from "@/lib/sim/environments";
+import { STRATEGIES, STRATEGY_IDS, plannedViewpoints, type StrategyId } from "@/lib/gantry/strategies";
+import { compareStrategies, type StrategyRow } from "@/lib/gantry/evaluate";
+import { LabCapturePanel } from "./LabCapturePanel";
 import { Btn, CardHead, Chain, Chip, ObjectChips, clampNum, f1, f2, isTargetClass, pad2, pct, signed, useObjects } from "./shared";
 
 /** Shown once a test has finished and nothing else is running. */
@@ -87,14 +90,13 @@ function siteRow(c: (typeof COMPONENTS)[number], env: Environment): { name: stri
 export function SystemCard() {
   const env = ENVIRONMENTS[useSimStore((s) => s.scenario.environment)];
   const setHighlight = useSimStore((s) => s.setHighlight);
+  const releaseHighlight = useSimStore((s) => s.releaseHighlight);
+  const pinHighlight = useSimStore((s) => s.pinHighlight);
   const highlight = useSimStore((s) => s.highlight);
-  const [sticky, setSticky] = useState<ComponentId | null>(null);
+  // the pin lives in the store, so leaving a 3D callout returns to it as leaving a row does
+  const sticky = useSimStore((s) => s.pinnedHighlight);
   const [mapping, setMapping] = useState(false);
-  const toggle = (id: ComponentId) => {
-    const next = sticky === id ? null : id;
-    setSticky(next);
-    setHighlight(next);
-  };
+  const toggle = (id: ComponentId) => pinHighlight(sticky === id ? null : id);
 
   return (
     <div>
@@ -113,9 +115,9 @@ export function SystemCard() {
               tabIndex={0}
               aria-pressed={sticky === c.id}
               onMouseEnter={() => setHighlight(c.id)}
-              onMouseLeave={() => setHighlight(sticky)}
+              onMouseLeave={releaseHighlight}
               onFocus={() => setHighlight(c.id)}
-              onBlur={() => setHighlight(sticky)}
+              onBlur={releaseHighlight}
               onClick={() => toggle(c.id)}
               onKeyDown={(e) => {
                 if (e.key !== "Enter" && e.key !== " ") return;
@@ -206,6 +208,7 @@ export function VisionCard() {
         <ObjectChips label="Point at" activeId={selected} onPick={trackObject} />
         <ViewResultLink className="ml-auto" />
       </div>
+      <LabCapturePanel />
     </div>
   );
 }
@@ -220,6 +223,10 @@ function XYPad() {
   const pos = useSimStore((s) => s.telemetry.gantry);
   const moveGantryTo = useSimStore((s) => s.moveGantryTo);
   const objects = useObjects();
+  const strategy = useSimStore((s) => s.scenario.strategy);
+  const waypoints = useSimStore((s) => s.scenario.waypoints);
+  // the selected strategy's plan, not always the serpentine's six points
+  const plan = useMemo(() => plannedViewpoints(strategy, waypoints), [strategy, waypoints]);
   const g = useSimStore.getState().engine.gantry;
   const px = (x: number) => (x / GANTRY.travelX) * 100;
   const py = (y: number) => (y / GANTRY.travelY) * 100;
@@ -268,8 +275,8 @@ function XYPad() {
       aria-label="Gantry XY pad: click or drag to move the carriage, arrow keys jog 5 cm, Shift and arrow 1 cm"
       title="Click to move the gantry"
     >
-      {TEST.scanWaypoints.map(([x, y]) => (
-        <span key={`${x}-${y}`} className="absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-dim" style={{ left: `${px(x)}%`, top: `${py(y)}%` }} />
+      {plan.map(([x, y], i) => (
+        <span key={`${i}-${x}-${y}`} data-waypoint className="absolute h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-dim" style={{ left: `${px(x)}%`, top: `${py(y)}%` }} />
       ))}
       {objects.map((o) => (
         <span
@@ -295,8 +302,9 @@ export function GantryCard() {
   const t = useSimStore(
     useShallow((s) => ({ x: s.telemetry.gantry.x, y: s.telemetry.gantry.y, moving: s.telemetry.gantry.moving, mode: s.mode, phase: s.phase })),
   );
-  // rl.targetId outlives the episode, so while tracking by hand the selected object wins.
-  const targetId = useSimStore((s) => (s.mode === "TRACK" ? s.selectedObjectId : (s.rl.targetId ?? s.selectedObjectId)));
+  // rl.targetId outlives the episode, so while tracking by hand the selected object wins, and a manual move has no
+  // target at all (it used to keep showing the last episode's object).
+  const targetId = useSimStore((s) => (s.mode === "MANUAL" ? null : s.mode === "TRACK" ? s.selectedObjectId : (s.rl.targetId ?? s.selectedObjectId)));
   const targetLabel = useSimStore((s) => s.scenario.objects.find((o) => o.id === targetId)?.label ?? null);
   const { moveGantryTo, runTest, stop, trackObject } = useSimStore(
     useShallow((s) => ({ moveGantryTo: s.moveGantryTo, runTest: s.runTest, stop: s.stop, trackObject: s.trackObject })),
@@ -580,6 +588,58 @@ function ObjectRow({ index }: { index: number }) {
   );
 }
 
+/** Parses "x,y; x,y" gantry cm pairs; anything unparsable is dropped. */
+function parseWaypoints(text: string): [number, number][] {
+  return text
+    .split(/[;\n]+/)
+    .map((pair) => pair.split(/[,\s]+/).filter(Boolean).map(Number))
+    .filter((p) => p.length === 2 && p.every(Number.isFinite))
+    .map(([x, y]) => [x, y] as [number, number]);
+}
+
+/** How the scan chooses viewpoints. Every option is a heuristic; the copy says so. */
+function StrategyPicker() {
+  const strategy = useSimStore((s) => s.scenario.strategy);
+  const waypoints = useSimStore((s) => s.scenario.waypoints);
+  const setScenario = useSimStore((s) => s.setScenario);
+  const info = STRATEGIES[strategy];
+  return (
+    <div className="mt-3">
+      <label className="flex items-center justify-between gap-3">
+        <span className="label">Inspection strategy</span>
+        <select
+          aria-label="Inspection strategy"
+          value={strategy}
+          onChange={(e) => setScenario({ strategy: e.target.value as StrategyId })}
+          className="value min-w-0 border border-line-strong bg-panel-2 px-1.5 py-[3px] text-[11px] text-text outline-none focus:border-teal"
+        >
+          {STRATEGY_IDS.map((id) => (
+            <option key={id} value={id}>
+              {STRATEGIES[id].name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="mt-1 text-[12px] leading-snug text-muted">
+        {info.summary} <span className="text-dim">Heuristic ({info.kind === "active-perception" ? "active perception" : info.kind}), not a trained policy.</span>
+      </p>
+      {strategy === "waypoints" && (
+        <input
+          key={waypoints.map((w) => w.join(",")).join(";")}
+          aria-label="Waypoints, gantry cm"
+          placeholder="x,y; x,y  e.g. 20,10; 60,30"
+          defaultValue={waypoints.map((w) => w.join(",")).join("; ")}
+          onBlur={(e) => setScenario({ waypoints: parseWaypoints(e.currentTarget.value) })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+          className="value mt-1 w-full border border-line-strong bg-panel-2 px-1.5 py-[3px] text-[11px] text-text outline-none focus:border-teal"
+        />
+      )}
+    </div>
+  );
+}
+
 export function ScenarioCard() {
   const sc = useSimStore(useShallow((s) => ({ environment: s.scenario.environment, turbidity: s.scenario.turbidity, lighting: s.scenario.lighting, threshold: s.scenario.threshold, gantrySpeed: s.scenario.gantrySpeed, count: s.scenario.objects.length })));
   const run = useSimStore(useShallow((s) => ({ phase: s.phase, events: s.events.length })));
@@ -597,6 +657,7 @@ export function ScenarioCard() {
         <Slider label="Detection threshold" value={sc.threshold} min={0.3} max={0.95} step={0.05} show={pct(sc.threshold, 0)} onChange={(v) => setScenario({ threshold: v })} />
         <Slider label="Gantry speed" value={sc.gantrySpeed} min={0.2} max={1} step={0.05} show={pct(sc.gantrySpeed, 0)} onChange={(v) => setScenario({ gantrySpeed: v })} />
       </div>
+      <StrategyPicker />
       <div className="mt-3 grid grid-cols-2 gap-x-6 border-t border-line max-[759px]:grid-cols-1">
         {Array.from({ length: sc.count }, (_, i) => (
           <ObjectRow key={i} index={i} />
@@ -668,6 +729,13 @@ export function ResultMetrics({ result, previous }: { result: TestResult; previo
         <span className="whitespace-nowrap">turbidity {fmtNtu(environmentNtu(env, result.turbidity))}</span>
         <span className="whitespace-nowrap">light {f2(result.lighting)}</span>
         <span className="whitespace-nowrap">threshold {pct(result.threshold, 0)}</span>
+        {result.strategy && (
+          <span className="whitespace-nowrap">
+            {STRATEGIES[result.strategy]?.name ?? result.strategy}: {result.viewpoints} views, {f1(result.pathCm / 100)} m travel
+            {result.repositionGain !== null && result.repositionGain !== undefined ? `, re-centring ${signed(result.repositionGain * 100, 1)}%` : ""}
+          </span>
+        )}
+        {result.missed?.length ? <span className="whitespace-nowrap">missed {result.missed.join(", ")}</span> : null}
         {previous && <span className="whitespace-nowrap text-dim">deltas vs previous run</span>}
       </div>
     </div>
@@ -680,11 +748,18 @@ export function ResultCard() {
   const events = useSimStore((s) => s.events);
   const { runTest, replayTest, setShowVision, setScene } = useSimStore(useShallow((s) => ({ runTest: s.runTest, replayTest: s.replayTest, setShowVision: s.setShowVision, setScene: s.setScene })));
   const [showLog, setShowLog] = useState(false);
+  const testing = useSimStore((s) => s.mode === "TEST");
 
   if (!result) {
+    // a scan clears the shown result until it completes, and a stopped scan has none: say which, never "no test yet"
+    const note = testing
+      ? "A test is running. Its result appears here when it completes."
+      : previous
+        ? "The last test was stopped before it completed, so it has no result. Run it again."
+        : "No test has run yet.";
     return (
       <div>
-        <CardHead title="Test result" note="No test has run yet." />
+        <CardHead title="Test result" note={note} />
         <Btn
           primary
           onClick={() => {
@@ -717,6 +792,7 @@ export function ResultCard() {
           ))}
         </div>
       )}
+      <StrategyComparison />
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Btn onClick={replayTest} title="Same seed, same scenario, same result.">
           <RotateCcw size={14} /> Replay test
@@ -726,6 +802,60 @@ export function ResultCard() {
           Simulation to field
         </Btn>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Runs every inspection strategy headlessly on the current scenario and seed and tabulates the outcome.
+ * Same water, objects and seed for each, so the rows differ only in where the camera was sent.
+ */
+function StrategyComparison() {
+  const [rows, setRows] = useState<StrategyRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    setRows([]);
+    const scenario = useSimStore.getState().engine.scenario;
+    await compareStrategies(structuredClone(scenario), undefined, (row) => setRows((r) => [...(r ?? []), row]));
+    setBusy(false);
+  };
+  return (
+    <div className="mt-2">
+      <button type="button" className="label flex items-center gap-1.5 hover:text-text disabled:opacity-50" onClick={run} disabled={busy}>
+        <span className="value text-[10px] text-dim">{busy ? "~" : "+"}</span> {busy ? "Comparing strategies" : "Compare inspection strategies"}
+      </button>
+      {rows && rows.length > 0 && (
+        <div className="mt-1 overflow-x-auto border border-line bg-ground/60" role="region" aria-label="Strategy comparison">
+          <table className="w-full font-mono text-[10px] leading-[15px]">
+            <thead>
+              <tr className="text-left text-dim">
+                {["Strategy", "Found", "OK", "FP", "Avg conf", "Coverage", "Travel", "Time", "Cov/m"].map((h) => (
+                  <th key={h} className="px-1.5 py-0.5 font-normal whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ strategy, result: r, efficiency }) => (
+                <tr key={strategy} className="border-t border-line text-muted">
+                  <td className="px-1.5 py-0.5 whitespace-nowrap text-text">{STRATEGIES[strategy].name}</td>
+                  <td className="px-1.5">{r.objectsDetected}</td>
+                  <td className="px-1.5 text-teal">{r.successfulDetections}</td>
+                  <td className={clsx("px-1.5", r.falsePositives > 0 && "text-amber")}>{r.falsePositives}</td>
+                  <td className="px-1.5">{pct(r.avgConfidence)}</td>
+                  <td className="px-1.5">{pct(r.coverage, 0)}</td>
+                  <td className="px-1.5 whitespace-nowrap">{f1(r.pathCm / 100)} m</td>
+                  <td className="px-1.5 whitespace-nowrap">{f1(r.durationS)} s</td>
+                  <td className="px-1.5">{f2(efficiency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="px-1.5 py-1 text-[10px] text-dim">SIMULATED. Same scenario and seed for every row. Heuristic controllers, not trained policies.</p>
+        </div>
+      )}
     </div>
   );
 }

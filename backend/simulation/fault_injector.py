@@ -12,6 +12,8 @@ class FaultInjector:
         self.broker = broker
         self.running = False
         self.active_faults = []
+        # healthy sensor noise, restored when a SENSOR_LOSS fault ends
+        self._noise_baseline = (broker.sim_depth.noise_std, broker.sim_imu.noise_std)
 
     def start(self):
         self.running = True
@@ -40,8 +42,7 @@ class FaultInjector:
 
     def _revert_sensor_loss(self):
         print("[FaultInjector] Reverting SENSOR_LOSS")
-        self.broker.sim_depth.noise_std = 0.5
-        self.broker.sim_imu.noise_std = 0.1
+        self.broker.sim_depth.noise_std, self.broker.sim_imu.noise_std = self._noise_baseline
         
     def _revert_leak(self):
         print("[FaultInjector] Reverting LEAK_DETECT")

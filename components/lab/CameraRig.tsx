@@ -207,6 +207,8 @@ export function CameraRig() {
   // `userZoom` is set by any wheel or pinch: from then on the distance is the user's and the glide only centres.
   const glide = useRef<{ target: THREE.Vector3; pos: THREE.Vector3; dir: THREE.Vector3; userZoom: boolean } | null>(null);
   const exploring = useSimStore((s) => s.exploring);
+  // true while the user drags a pan (right button, modifier + left, two fingers): the pivot is theirs, the glide stops
+  const panning = useRef(false);
   const following = useRef(false);
   const userMoved = useRef(false);
   const tmp = useMemo(
@@ -344,7 +346,8 @@ export function CameraRig() {
     following.current = false;
     userMoved.current = true;
     camera.layers.enable(OVERHEAD_LAYER); // explore shows the whole machine from any side; leaving refits the preset's layers
-    glide.current = { target: new THREE.Vector3(), pos: new THREE.Vector3(), dir: new THREE.Vector3(), userZoom: false };
+    // a pan that opened explore keeps the pivot where the user puts it; only an orbit or a zoom glides to the machine
+    glide.current = panning.current ? null : { target: new THREE.Vector3(), pos: new THREE.Vector3(), dir: new THREE.Vector3(), userZoom: false };
   }, [exploring, camera, size, viewEpoch]);
 
   // A wheel tick or a two-finger touch means the user is choosing the distance; the glide stops dollying.
@@ -353,14 +356,37 @@ export function CameraRig() {
     const own = () => {
       if (glide.current) glide.current.userZoom = true;
     };
+    // A pan moves the pivot on purpose, so it ends the glide that would otherwise pull the pivot back to the machine.
+    // OrbitControls pans with the right button, or the left button with Ctrl, Meta or Shift held.
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
+      panning.current = e.button === 2 || (e.button === 0 && (e.ctrlKey || e.metaKey || e.shiftKey));
+      if (panning.current) glide.current = null;
+    };
+    const onUp = () => {
+      panning.current = false;
+    };
     const onTouch = (e: TouchEvent) => {
-      if (e.touches.length > 1) own();
+      if (e.touches.length < 2) return;
+      // two fingers pinch and pan together: the distance and the pivot are the user's
+      own();
+      panning.current = true;
+      glide.current = null;
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) panning.current = false;
     };
     el.addEventListener("wheel", own, { passive: true });
+    el.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
     el.addEventListener("touchstart", onTouch, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
     return () => {
       el.removeEventListener("wheel", own);
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
       el.removeEventListener("touchstart", onTouch);
+      el.removeEventListener("touchend", onTouchEnd);
     };
   }, [gl]);
 

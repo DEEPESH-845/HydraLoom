@@ -1,6 +1,7 @@
 "use client";
 
 import clsx from "clsx";
+import Link from "next/link";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Focus, Play, Rotate3d, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -249,7 +250,10 @@ function TopBar() {
   return (
     <header data-lab="header" className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-between gap-4 border-b border-line/70 bg-ground/85 px-4 max-[999px]:static max-[479px]:gap-2 max-[479px]:px-3 max-[999px]:shrink-0">
       <div className="pointer-events-auto flex min-w-0 items-baseline gap-3 overflow-hidden">
-        <span className="whitespace-nowrap font-mono text-[13px] font-semibold tracking-[0.28em] text-text max-[479px]:text-[12px] max-[479px]:tracking-[0.18em]">GANTRYLAB</span>
+        {/* the wordmark leads back to the platform (all environments, Model Lab, Reports); the lab is one of its modes */}
+        <Link href="/" title="All environments, Model Lab and Reports" className="whitespace-nowrap font-mono text-[13px] font-semibold tracking-[0.28em] text-text outline-offset-2 hover:text-teal max-[479px]:text-[12px] max-[479px]:tracking-[0.18em]">
+          GANTRYLAB
+        </Link>
         <span className="label whitespace-nowrap max-[1399px]:hidden">Underwater robotics testbed</span>
         <span className="hidden truncate whitespace-nowrap text-[12px] text-muted min-[1680px]:block">Test underwater autonomy in a tank before open water.</span>
       </div>

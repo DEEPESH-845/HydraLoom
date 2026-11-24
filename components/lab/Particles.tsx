@@ -3,6 +3,7 @@
 import { useFrame } from "@react-three/fiber";
 import { useMemo } from "react";
 import * as THREE from "three";
+import { useDeferredDispose } from "@/components/field/common";
 import { mulberry32 } from "@/lib/sim/rng";
 import { WATER_GLSL, currentWater, waterTime, waterUniforms } from "./water";
 
@@ -74,7 +75,8 @@ export interface ParticlesProps {
 const NO_DRIFT: [number, number] = [0, 0];
 
 export function Particles({ min, max, count, drift = NO_DRIFT }: ParticlesProps) {
-  // props must be stable (module constants), so this builds once per box
+  // props must be stable (module constants), so this builds once per box; the drift is a live uniform, so a new
+  // environment's current never rebuilds (and never leaks) the cloud
   const { geo, mat, update } = useMemo(() => {
     const rand = mulberry32(99);
     const pos = new Float32Array(count * 3);
@@ -97,23 +99,29 @@ export function Particles({ min, max, count, drift = NO_DRIFT }: ParticlesProps)
         uOpacity: { value: 0.7 },
         uBoxMin: { value: new THREE.Vector3(...min) },
         uBoxSize: { value: new THREE.Vector3(max[0] - min[0], max[1] - min[1], max[2] - min[2]) },
-        uDrift: { value: new THREE.Vector2(...drift) },
+        uDrift: { value: new THREE.Vector2() },
         ...waterUniforms,
       },
       transparent: true,
       depthWrite: false,
     });
     /** Per-frame uniforms. Suspended particles are what turbidity is: their number follows particle scattering. */
-    const update = (t: number, pixelRatio: number) => {
+    const update = (t: number, pixelRatio: number, current: readonly [number, number]) => {
       mat.uniforms.uTime.value = waterTime(t);
+      (mat.uniforms.uDrift.value as THREE.Vector2).set(current[0], current[1]);
       mat.uniforms.uPixelRatio.value = pixelRatio;
       const bG = currentWater.optics.b[1];
       geo.setDrawRange(0, Math.round(count * Math.min(1, 0.08 + 0.3 * Math.max(0, bG - 0.002))));
     };
     return { geo, mat, update };
-  }, [min, max, count, drift]);
+  }, [min, max, count]);
+  const resources = useMemo(() => ({ geo, mat }), [geo, mat]);
+  useDeferredDispose(resources, () => {
+    geo.dispose();
+    mat.dispose();
+  });
 
-  useFrame((state) => update(state.clock.elapsedTime, state.gl.getPixelRatio()));
+  useFrame((state) => update(state.clock.elapsedTime, state.gl.getPixelRatio(), drift));
 
   return <points geometry={geo} material={mat} renderOrder={2} />;
 }

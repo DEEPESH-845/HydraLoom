@@ -47,7 +47,7 @@ export class Lab {
   constructor(readonly page: Page) {}
 
   async open() {
-    await this.page.goto("/");
+    await this.page.goto("/lab");
     await this.page.waitForFunction(() => !!window.__labStore && !!document.querySelector("canvas"));
     // one published snapshot means the sim loop is alive
     await this.page.waitForFunction(() => (window.__labStore!.getState().telemetry.time ?? 0) > 0);

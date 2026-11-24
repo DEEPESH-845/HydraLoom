@@ -26,6 +26,7 @@ class SimulatedDepth(EnvironmentInterface):
     def __init__(self, physics: ThrusterPhysicsEngine):
         self.physics = physics
         self.base_temp = 14.5
+        self.noise_std = 0.02  # barometric noise, m
         
     def connect(self) -> bool: return True
     def is_connected(self) -> bool: return True
@@ -33,7 +34,7 @@ class SimulatedDepth(EnvironmentInterface):
     def get_depth(self) -> float:
         state = self.physics.get_state()
         # Add slight barometric noise
-        return state["depth"] + np.random.normal(0, 0.02)
+        return state["depth"] + np.random.normal(0, self.noise_std)
         
     def get_temperature(self) -> float:
         # Deeper = Colder

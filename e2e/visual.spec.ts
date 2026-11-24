@@ -10,7 +10,7 @@ test.describe("visual", () => {
       await lab.scene(n);
       await page.waitForTimeout(1000); // card swap and any layout refit start inside this window
       await lab.settleCamera();
-      await expect(page).toHaveScreenshot(`scene${n}.png`, { maxDiffPixelRatio: 0.04, animations: "disabled" });
+      await expect(page).toHaveScreenshot(`scene${n}.png`, { maxDiffPixelRatio: 0.04, animations: "disabled", timeout: 60_000 });
     }
   });
 });

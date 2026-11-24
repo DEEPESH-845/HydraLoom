@@ -29,7 +29,7 @@ export interface Weathering {
 const SILT = new THREE.Color("#8d846c");
 const GROWTH = new THREE.Color("#3a3d22");
 
-const GLSL_NOISE = /* glsl */ `
+export const GLSL_NOISE = /* glsl */ `
 float wHash(vec3 p) {
   p = fract(p * 0.3183099 + 0.1);
   p *= 17.0;

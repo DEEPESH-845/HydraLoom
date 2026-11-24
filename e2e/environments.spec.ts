@@ -38,6 +38,34 @@ const switchTo = (page: Page, environment: EnvironmentId) =>
 const FIELD: EnvironmentId[] = ["harbor", "river", "deepsea"];
 const NOT_BLACK = 10;
 
+test.describe("environment switching keeps GPU memory flat", () => {
+  test("cycling every environment releases the previous dressing's geometries", async ({ lab, page }) => {
+    // regression: each switch built a new dressing (scatter, props) and a new particle cloud and never disposed the
+    // old ones, about 13 geometries per cycle
+    test.setTimeout(600_000);
+    await lab.open();
+    const cycle = async () => {
+      for (const id of [...FIELD, "tank"] as EnvironmentId[]) {
+        await switchTo(page, id);
+        // the dressing actually mounted (siteReady alone can still read true before the veil drops)
+        await expect.poll(() => sites(page), { timeout: 120_000 }).toEqual(["aquarium", `tank-dressing-${id}`]);
+        await lab.waitFor((s) => s.siteReady, undefined, 120_000);
+      }
+    };
+    const geometries = () => page.evaluate(() => (window.__labStats as unknown as { geometries: number }).geometries);
+    // two warm-up cycles: every dressing and the idle-time shader warm-up have run once
+    await cycle();
+    await cycle();
+    // disposal is deferred 4 s (StrictMode-safe); wait it out before every reading
+    await page.waitForTimeout(6000);
+    const first = await geometries();
+    await cycle();
+    await cycle();
+    await page.waitForTimeout(6000);
+    expect(await geometries()).toBeLessThanOrEqual(first);
+  });
+});
+
 test.describe("environments", () => {
   test("each environment dresses the same tank, renders a lit feed, and the lab tank comes back", async ({ lab, page }) => {
     // software GL renders the lamp-lit deep sea at a few frames per second; a single feed screenshot can take long
