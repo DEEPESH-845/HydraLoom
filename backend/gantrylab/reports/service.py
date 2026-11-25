@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import HTTPException
 
 from ..adapters import MOCK_BANNER
@@ -268,11 +269,18 @@ class ReportService:
         src = self.settings.reports_dir / rid / "inputs" / file
         original = src.read_text(encoding="utf-8") if src.exists() else ""
         sgs = [s for s in report["config_suggestions"] if s["file"] == file and s["patchable"]]
-        patched, applied = apply_suggestions(original, sgs) if sgs else (original, [])
+        patched, applied, failed = original, [], None
+        if sgs:
+            try:
+                patched, applied = apply_suggestions(original, sgs)
+            except (yaml.YAMLError, ValueError, RecursionError) as exc:
+                failed = type(exc).__name__
         note = ("Patched COPY generated from the stored original; the original upload is unchanged. "
                 "Suggestions are hypotheses to test and do not imply improved weights.")
         if not src.exists():
             note += " No original file was supplied, so the copy contains only the suggested keys."
+        if failed:
+            note += f" The original could not be patched line by line ({failed}); apply the suggestions by hand."
         if not sgs:
             note += " No suggestions apply to this file."
         return PatchResponse(report_id=rid, file=file, original_source="user_file" if src.exists() else "empty",

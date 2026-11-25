@@ -56,6 +56,15 @@ def fmt(v: Any, nd: int = 3) -> str:
     return str(v)
 
 
+def _join_capped(parts: list[str], sep: str, limit: int) -> str:
+    """Join whole parts up to ``limit`` characters so that long class lists fit the narrative schema."""
+    n = used = 0
+    while n < len(parts) and used + len(parts[n]) <= limit:
+        used += len(parts[n]) + len(sep)
+        n += 1
+    return sep.join(parts[:n] + ([f"{len(parts) - n} more"] if n < len(parts) else []))
+
+
 def times(n: int) -> str:
     return f"{n} time" if n == 1 else f"{n} times"
 
@@ -80,7 +89,7 @@ def deterministic_recommendations(ev: dict, suggestions: list[dict]) -> list[dic
     cm = it["run:class_map"]
     uncovered = [c for c in cm["dataset_classes"] if c not in {v for v in cm["resolved"].values() if v}]
     if uncovered:
-        add(f"Provide a class_map or a model trained on {', '.join(uncovered)}.",
+        add(f"Provide a class_map or a model trained on {_join_capped(uncovered, ', ', 300)}.",
             f"{len(uncovered)} dataset classes have no mapped model class, so every object of those classes is a miss.",
             ["run:class_map"])
     mdc = it["analysis:most_degrading_condition"]
@@ -155,11 +164,11 @@ def deterministic_narrative(ev: dict, suggestions: list[dict], next_exp: dict) -
         if k.startswith("class:") and v["support"] > 0:
             pc_lines.append(f"{k[6:]}: P={fmt(v['precision'])}, R={fmt(v['recall'])}, AP50={fmt(v['ap50'])} "
                             f"(support {v['support']})")
-    perf = (overall.replace(prefix, "") + " Per class: " + "; ".join(pc_lines) + "." if pc_lines else
+    perf = (overall.replace(prefix, "") + " Per class: " + _join_capped(pc_lines, "; ", 2000) + "." if pc_lines else
             overall.replace(prefix, "") + " No class had ground truth.")
     low = it["analysis:low_support_classes"]
     if low:
-        perf += f" Classes with fewer than {MIN_SUPPORT} objects ({', '.join(low)}) have unreliable per-class metrics."
+        perf += f" Classes with fewer than {MIN_SUPPORT} objects ({_join_capped(low, ', ', 500)}) have unreliable per-class metrics."
 
     spreads = it["analysis:condition_spreads"]
     if spreads:

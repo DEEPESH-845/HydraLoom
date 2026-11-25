@@ -34,7 +34,7 @@ def parse_user_files(user_files: dict[str, str] | None) -> tuple[dict[str, dict]
     for name, text in (user_files or {}).items():
         try:
             doc = yaml.safe_load(text) if text.strip() else {}
-        except yaml.YAMLError as exc:
+        except (yaml.YAMLError, ValueError, RecursionError) as exc:  # ValueError: impossible dates
             notes.append(f"{name}: could not parse YAML ({type(exc).__name__}); defaults were used")
             continue
         if doc is None:
@@ -44,6 +44,21 @@ def parse_user_files(user_files: dict[str, str] | None) -> tuple[dict[str, dict]
             continue
         parsed[name] = doc
     return parsed, notes
+
+
+def _plain(v: Any) -> bool:
+    if isinstance(v, str):
+        return v == v.encode("utf-8", "replace").decode()  # no lone surrogates
+    return v is None or isinstance(v, (bool, int)) or (isinstance(v, float) and math.isfinite(v))
+
+
+def _reportable(v: Any) -> Any:
+    """A user YAML value as it may appear in a report. Nested aliases expand exponentially or form cycles in JSON."""
+    if _plain(v) or (isinstance(v, list) and all(map(_plain, v))):
+        return v
+    if isinstance(v, dict) and all(isinstance(k, (int, str)) and _plain(k) and _plain(x) for k, x in v.items()):
+        return v
+    return f"({type(v).__name__} value)"
 
 
 def _conf_level(n: int) -> str:
@@ -63,7 +78,7 @@ class _Builder:
     def original(self, file: str, key: str) -> tuple[Any, str]:
         doc = self.user.get(file)
         if doc is not None and key in doc:
-            return doc[key], "user_file"
+            return _reportable(doc[key]), "user_file"
         if file == "inference.yaml" and key in self.run_cfg:
             return self.run_cfg[key], "run_config"
         if file == "hyp.yaml" and key in ULTRALYTICS_DEFAULTS:
@@ -135,8 +150,8 @@ def build_suggestions(metrics: dict, run: dict, analysis: dict, user_files: dict
     fp_types = metrics["fp_types"]
     fp_total = sum(fp_types.values())
     dup = fp_types.get("duplicate", 0)
-    if dup >= 3 and fp_total and dup / fp_total >= 0.15:
-        new_iou = round(max(0.45, cfg["iou"] - 0.15), 2)
+    new_iou = round(max(0.45, cfg["iou"] - 0.15), 2)
+    if dup >= 3 and fp_total and dup / fp_total >= 0.15 and new_iou < cfg["iou"]:
         b.add("inference.yaml", "iou", new_iou,
               f"{dup} of {fp_total} false positives are duplicates of an already matched object.",
               ["fp_types"], "Fewer duplicate boxes per object, raising precision.",
@@ -149,8 +164,8 @@ def build_suggestions(metrics: dict, run: dict, analysis: dict, user_files: dict
               if s and s["recall"] is not None and s["n_gt"] >= MIN_SUPPORT]
     if small and small["recall"] is not None and small["n_gt"] >= MIN_SUPPORT and small["recall"] < 0.5 and larger:
         ref = max(larger, key=lambda s: s["recall"])
-        if ref["recall"] - small["recall"] >= 0.2:
-            new_sz = min(1280, _round32(cfg["imgsz"] * 1.5))
+        new_sz = min(1280, _round32(cfg["imgsz"] * 1.5))
+        if ref["recall"] - small["recall"] >= 0.2 and new_sz > cfg["imgsz"]:
             refs = [small["id"], ref["id"]]
             reason = (f"Small-object recall is {small['recall']:.3f} (n_gt={small['n_gt']}) versus "
                       f"{ref['recall']:.3f} for {ref['bucket']} objects (n_gt={ref['n_gt']}).")
