@@ -12,7 +12,10 @@
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
     "e2e:update": "playwright test --update-snapshots",
-    "backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backend.ps1"
+    "backend": "bash scripts/backend.sh",
+    "rl:train": "tsx scripts/rl-train.ts",
+    "backend:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backend.ps1",
+    "check": "npm run typecheck && npm run lint && npm run test:unit && npm run sim:check && npm run build"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -39,5 +42,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
