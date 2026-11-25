@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import platform
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -42,7 +44,7 @@ def resolve_class_map(model_names: list[str], dataset_classes: list[str],
     lower = {c.lower(): c for c in dataset_classes}
     out: dict[str, str | None] = {}
     for n in model_names:
-        out[n] = user_map[n] if n in user_map else lower.get(n.lower())
+        out[n] = user_map[n] if n in user_map else n if n in dataset_classes else lower.get(n.lower())
     unmapped = sorted(n for n, v in out.items() if v is None)
     covered = {v for v in out.values() if v is not None}
     uncovered = [c for c in dataset_classes if c not in covered]
@@ -58,6 +60,7 @@ class RunManager:
         self.events: dict[str, list[dict]] = {}
         self.cond = threading.Condition()
         self.futures: dict[str, Any] = {}
+        self.stopping = threading.Event()
 
     # -- storage -------------------------------------------------------------
 
@@ -212,6 +215,8 @@ class RunManager:
         last_emit = [0.0]
 
         def progress(done: int) -> None:
+            if self.stopping.is_set():
+                raise RuntimeError("interrupted by service shutdown")
             now = time.perf_counter()
             if now - last_emit[0] > 0.25 or done == len(frames):
                 last_emit[0] = now
@@ -250,7 +255,10 @@ class RunManager:
                 t = msg.get("type")
                 if t == "frame":
                     i = int(msg["i"])
-                    frame_results[i] = {"file": msg["file"], "detections": msg.get("detections", []),
+                    # A diverged model can emit NaN boxes; JSON responses cannot carry them.
+                    dets = [d for d in msg.get("detections", [])
+                            if all(math.isfinite(v) for v in (*d["bbox_xyxy"], d["conf"]))]
+                    frame_results[i] = {"file": msg["file"], "detections": dets,
                                         "timing": msg.get("timing", {})}
                     done[0] += 1
                     progress(done[0])
@@ -267,7 +275,10 @@ class RunManager:
                 "infer", job,
                 SandboxLimits(timeout_s=self.settings.worker_timeout_s, memory_mb=self.settings.worker_mem_mb),
                 tmp_root=self.settings.tmp_dir, on_message=on_message, sample_gpu=cfg.device in ("cuda", "auto"),
+                cancel_event=self.stopping,
             )
+            if not res.ok and self.stopping.is_set():
+                raise RuntimeError("interrupted by service shutdown")
             if not res.ok:
                 raise RuntimeError(f"sandbox worker failed: {res.error}")
             result = res.result or {}
@@ -357,7 +368,12 @@ class RunManager:
     # -- lifecycle -----------------------------------------------------------
 
     def recover(self) -> None:
-        """Mark runs interrupted by a restart as failed (their worker process is gone)."""
+        """Mark runs interrupted by a restart as failed (their worker process is gone) and drop its temp files."""
+        for p in [*self.settings.tmp_dir.glob("*"), *self.settings.datasets_dir.glob(".ds_*.staging")]:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
         if not self.settings.runs_dir.exists():
             return
         for d in self.settings.runs_dir.iterdir():
@@ -376,4 +392,6 @@ class RunManager:
         return self.get(run_id)
 
     def shutdown(self) -> None:
+        # Without this the interpreter waits for the active worker (up to worker_timeout_s) before it exits.
+        self.stopping.set()
         self.pool.shutdown(wait=False, cancel_futures=True)

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 from fastapi import HTTPException
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 from pydantic import ValidationError
 
 from ..api.multipart import ParsedForm
@@ -138,8 +138,8 @@ class DatasetStore:
         raw_text = manifests[0]
         try:
             raw = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail=f"manifest is not valid JSON: {exc.msg}") from exc
+        except (ValueError, RecursionError) as exc:  # JSONDecodeError, over-long integer, too deep
+            raise HTTPException(status_code=422, detail=f"manifest is not valid JSON: {getattr(exc, 'msg', exc)}") from exc
         try:
             manifest = DatasetManifest.model_validate(raw)
         except ValidationError as exc:
@@ -230,7 +230,7 @@ class DatasetStore:
                 fmt = im.format
                 size = im.size
                 im.load()
-        except (UnidentifiedImageError, OSError, Image.DecompressionBombError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - decoders raise SyntaxError, struct.error, ... on corrupt data
             raise HTTPException(status_code=400, detail=f"{name}: image does not decode ({type(exc).__name__})") from exc
         if fmt != expected_fmt:
             raise HTTPException(status_code=400, detail=f"{name}: content is {fmt}, extension implies {expected_fmt}")

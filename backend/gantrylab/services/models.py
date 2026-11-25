@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import shutil
+import threading
 import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import HTTPException
 
@@ -58,7 +60,9 @@ def validate_magic(path: Path, fmt: str, head: bytes) -> None:
                 if len(infos) > MAX_ZIP_ENTRIES:
                     raise HTTPException(status_code=400, detail="invalid .pt file: too many archive entries")
                 names = [i.filename for i in infos]
-        except zipfile.BadZipFile as exc:
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - BadZipFile, NotImplementedError, UnicodeDecodeError, ...
             raise HTTPException(status_code=400, detail="invalid .pt file: corrupt zip archive") from exc
         pkls = [n for n in names if DATA_PKL_RE.match(n)]
         if len(pkls) != 1:
@@ -71,12 +75,24 @@ def validate_magic(path: Path, fmt: str, head: bytes) -> None:
             raise HTTPException(status_code=400, detail="invalid .onnx file: not an ONNX protobuf (bad magic)")
 
 
+def _null_non_finite(v: Any) -> Any:
+    """Checkpoint metadata may hold NaN or Infinity, which JSON responses cannot carry."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, dict):
+        return {k: _null_non_finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_null_non_finite(x) for x in v]
+    return v
+
+
 class ModelRegistry:
     def __init__(self, settings: Settings, inspector: Inspector | None = None) -> None:
         self.settings = settings
         self.inspector = inspector or self._sandbox_inspect
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gl-inspect")
         self.futures: dict[str, Future] = {}
+        self.stopping = threading.Event()
 
     # -- storage -------------------------------------------------------------
 
@@ -187,6 +203,7 @@ class ModelRegistry:
             {"model_path": str(path), "format": fmt},
             SandboxLimits(timeout_s=self.settings.inspect_timeout_s, memory_mb=self.settings.worker_mem_mb),
             tmp_root=self.settings.tmp_dir,
+            cancel_event=self.stopping,
         )
         if not res.ok or not res.result:
             raise InspectionRejected(res.error or "inspection failed")
@@ -204,7 +221,7 @@ class ModelRegistry:
             for key in ("checkpoint_ultralytics_version", "checkpoint_date", "checkpoint_torch_version"):
                 if data.get(key) is not None:
                     data[key] = str(data[key])
-            inspection = ModelInspection.model_validate(data).model_dump()
+            inspection = _null_non_finite(ModelInspection.model_validate(data).model_dump())
             task = inspection.get("task")
             if task not in SUPPORTED_TASKS:
                 reason = f"task {task!r} is not supported for detection evaluation (supported: detect, segment, pose)"
@@ -217,6 +234,8 @@ class ModelRegistry:
         except Exception as exc:  # noqa: BLE001
             log.exception("inspection crashed for %s", sha)
             reason = f"inspection error: {type(exc).__name__}: {exc}"
+        if status == "rejected" and self.stopping.is_set():
+            return  # interrupted by shutdown: stays "pending" and is re-inspected on the next start-up
         try:
             with lock_for("models"):
                 raw = self._load_raw(sha) or raw
@@ -239,4 +258,5 @@ class ModelRegistry:
         return self.get(sha)
 
     def shutdown(self) -> None:
+        self.stopping.set()
         self.pool.shutdown(wait=False, cancel_futures=True)
