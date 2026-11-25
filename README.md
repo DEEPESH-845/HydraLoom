@@ -32,6 +32,7 @@ npm run dev
 ```
 
 Open http://localhost:3000 for the platform (environments, platforms, simulation, live analysis), http://localhost:3000/lab for the Gantry Lab, `/models` for the Model Lab and `/reports` for analysis and reports.
+`/benchmark` compares several models and says what to change, `/autonomy` runs the learned navigation and model switching, and `/hardware` connects and tests the physical gantry (`docs/AUTONOMY.md`).
 In the Gantry Lab the scene index on the left walks through seven scenes; `RUN DEMO` plays an autonomous narrated sequence of about 75 seconds.
 
 The Model Lab and Reports need the evaluation backend:
@@ -39,7 +40,7 @@ The Model Lab and Reports need the evaluation backend:
 ```bash
 cd backend
 # one-time install: the exact commands are in backend/README_GANTRYLAB.md (CUDA 12.8 or CPU torch wheels)
-.venv/Scripts/python -m uvicorn gantrylab.app:app --port 8000
+.venv/bin/python -m uvicorn gantrylab.app:app --port 8000   # Windows: .venv/Scripts/python
 ```
 
 Other scripts:
@@ -48,10 +49,13 @@ Other scripts:
 |---|---|
 | `npm run test:unit` | Unit tests of the physics, field engine, environments, gantry strategies and hardware safety (`lib/**/*.test.ts`) |
 | `npm run e2e` | Playwright suite (lab, field, capture, evaluation UI) |
+| `npm run rl:train` | Retrains the learned viewpoint policy and records its held-out scores |
 | `npm run sim:check` | Headless check of the simulation engine: determinism, rail limits, a full test run, a hard scenario, motion settling |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm run build` | Production build |
+
+Deploying: `docs/DEPLOY.md`. `npm run check` runs everything that must pass before a release.
 
 Continuing development in a new session: read `docs/HANDOFF.md` first, then `docs/BLUEPRINT.md`.
 
@@ -84,7 +88,7 @@ The engine is pure TypeScript in `lib/sim/`, deterministic and fixed-timestep, w
 
 - **Gantry** (`gantry.ts`): each axis follows a trapezoidal velocity profile toward its target, 15 cm/s max, 30 cm/s^2, clamped to 100 x 40 cm of travel. The axes are coordinated so every move is a straight line, and the 3D view interpolates between simulation steps so motion is smooth at any display rate. The carriage never teleports and never leaves the rails.
 - **Detection** (`detection.ts`): the camera is a pinhole 42 cm above the sand with a 75 degree horizontal field of view. Objects are projected into the frame; confidence is `detectability * geometry * water * light`, where geometry falls off with distance from the optical axis and burial in sand, water is the fraction of the object's contrast against the sand that survives the water path, from the same optics the renderer draws (zero at the 2 percent contrast threshold), and light is `lighting^0.3` (in the lamp-lit deep sea, the square root of the lamp's irradiance on the object, falling off with the square of distance), so no light sees nothing and heavy silt sees nothing at the default threshold. Bounding boxes are real projections of the object bounds. Objects below the threshold are missed; low-confidence detections degrade to `UNKNOWN`, and one debris object is deliberately confusable with the training target, which gives a deterministic false positive.
-- **Control** (`policy.ts`): a greedy controller over five actions (`MOVE_X+`, `MOVE_X-`, `MOVE_Y+`, `MOVE_Y-`, `HOLD`) with epsilon exploration that decays with episode number, seeded so replays are identical. Reward is distance closed per step, plus a confidence bonus, minus a step cost, plus a bonus for holding on target. The reward is logged, not learned from; the interface says so. A trained policy would consume the same observation.
+- **Control** (`policy.ts`, the tracking step after a scan; the scan itself can use the learned planner, `docs/AUTONOMY.md`): a greedy controller over five actions (`MOVE_X+`, `MOVE_X-`, `MOVE_Y+`, `MOVE_Y-`, `HOLD`) with epsilon exploration that decays with episode number, seeded so replays are identical. Reward is distance closed per step, plus a confidence bonus, minus a step cost, plus a bonus for holding on target. The reward is logged, not learned from; the interface says so. A trained policy would consume the same observation.
 - **Test runner** (`engine.ts`): drive home, scan six waypoints, record detections, pick the best correct detection as the target, run one control episode, report. `REPLAY TEST` re-runs with the same seed and produces the same numbers.
 - **Feed** (`components/lab/FeedRenderer.tsx`): the camera feed panel is the same Three.js scene rendered a second time from the carriage camera, so what you see in the feed is what the gantry camera would see.
 - **Water** (`lib/optics/water.ts`, `components/lab/water.ts`): turbidity is shown in NTU with the range at which contrast falls to 2 percent. Per-channel absorption and scattering come from published pure-water data plus a clay suspension; every submerged surface is attenuated along its true path through the water and veiled by the scattered light, in both views.
