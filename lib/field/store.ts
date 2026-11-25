@@ -1,11 +1,10 @@
 import { create } from "zustand";
 import type { PilotMode, Stick } from "../physics/autopilot";
-import type { CurrentConfig } from "../physics/current";
 import type { MissionId } from "../missions";
 import { compatibility, isPlatformId, type PlatformId } from "../platforms";
 import { ENVIRONMENT_LIBRARY, isFieldEnvironmentId } from "../world/environments";
 import type { FieldEnvironmentId } from "../world/schema";
-import { FieldEngine, type FieldConditions, type FieldEvent, type FieldTelemetry, type MissionPhase, type MissionResult } from "./engine";
+import { FieldEngine, type ConditionsPatch, type FieldConditions, type FieldEvent, type FieldTelemetry, type MissionPhase, type MissionResult } from "./engine";
 import type { FieldDetection } from "./detection";
 
 /** Workspaces of the platform shell. 04 and 06 are their own routes (/models, /reports). */
@@ -21,6 +20,8 @@ export interface FieldSnapshot {
   conditions: FieldConditions;
   telemetry: FieldTelemetry;
   detections: FieldDetection[];
+  /** best detection of every target found so far, by a mission or by hand */
+  finds: FieldDetection[];
   events: FieldEvent[];
   phase: MissionPhase;
   result: MissionResult | null;
@@ -52,7 +53,9 @@ interface FieldStore extends FieldSnapshot {
   selectEnvironment: (id: FieldEnvironmentId) => void;
   selectPlatform: (id: PlatformId) => void;
   setMission: (id: MissionId) => void;
-  setConditions: (patch: Partial<Omit<FieldConditions, "current">> & { current?: Partial<CurrentConfig> }) => void;
+  setConditions: (patch: ConditionsPatch) => void;
+  /** back to the environment's default conditions (restarts the run) */
+  resetConditions: () => void;
   setPilotMode: (m: PilotMode) => void;
   setStick: (s: Partial<Stick>) => void;
   aimStation: (pan: number, tilt: number) => void;
@@ -74,9 +77,10 @@ function snapshot(e: FieldEngine): FieldSnapshot {
     envId: e.env.id as FieldEnvironmentId,
     platformId: e.platform.id,
     mission: e.mission,
-    conditions: { ...e.conditions, current: { ...e.conditions.current } },
+    conditions: { ...e.conditions, current: { ...e.conditions.current }, site: { ...e.conditions.site } },
     telemetry: e.telemetry(),
     detections: e.detections,
+    finds: e.finds(),
     events: e.events,
     phase: e.phase,
     result: e.result,
@@ -151,6 +155,13 @@ export const useFieldStore = create<FieldStore>((set, get) => {
     },
     setConditions: (patch) => {
       engine.setConditions(patch);
+      publish();
+    },
+    resetConditions: () => {
+      const platform = engine.platform.id;
+      const mission = engine.mission;
+      engine.configure(engine.env.id as FieldEnvironmentId, platform);
+      engine.setMission(mission);
       publish();
     },
     setPilotMode: (m) => {
