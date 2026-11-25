@@ -1,0 +1,61 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run sim:check
+      - run: npm run build
+      # the pages without a 3D scene: software GL on a runner is too slow for the timing-sensitive 3D suites
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test e2e/evaluation.spec.ts e2e/workbench.spec.ts
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright
+          path: e2e/.results
+          retention-days: 7
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-gantrylab.txt
+      - run: pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-gantrylab.txt
+      - run: python -m pytest tests_gantrylab -q -m "not real"
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t gantrylab-backend backend
+      - run: |
+          docker run -d --name b -p 8000:8000 gantrylab-backend
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/v1/health && exit 0; sleep 1; done
+          docker logs b; exit 1
