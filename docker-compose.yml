@@ -1,20 +1,41 @@
-version: '3.8'
-
+# docker compose up backend        the model-evaluation service (any machine)
+# docker compose --profile edge up the legacy camera and serial service (Raspberry Pi only)
 services:
-  hydraloom-edge:
-    build: 
+  backend:
+    build:
       context: ./backend
-      dockerfile: Dockerfile
-    container_name: hydraloom-edge
     restart: unless-stopped
-    network_mode: "host" # Required for low-latency UDP GStreamer and hardware UART access
-    devices:
-      - "/dev/video0:/dev/video0" # USB Camera
-      - "/dev/ttyAMA0:/dev/ttyAMA0" # UART Serial to FRDM MCU
+    ports:
+      # localhost only: put a TLS reverse proxy in front before exposing it
+      - "127.0.0.1:8000:8000"
     environment:
-      - PYTHONUNBUFFERED=1
+      GANTRYLAB_API_TOKEN: ${GANTRYLAB_API_TOKEN:-}
+      GANTRYLAB_CORS_ORIGINS: ${GANTRYLAB_CORS_ORIGINS:-http://localhost:3000}
+      GANTRYLAB_LLM_PROVIDER: ${GANTRYLAB_LLM_PROVIDER:-deterministic}
+    volumes:
+      - gantrylab-data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 8g
     logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  edge:
+    profiles: [edge]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.edge
+    restart: unless-stopped
+    network_mode: host # UDP GStreamer and the UART
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/ttyAMA0:/dev/ttyAMA0
+    environment:
+      PYTHONUNBUFFERED: "1"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  gantrylab-data:
