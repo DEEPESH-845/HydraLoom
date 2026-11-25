@@ -1,6 +1,7 @@
 "use client";
 
 import * as THREE from "three";
+import { authHeaders } from "@/lib/api/client";
 import type { Vec3 } from "@/lib/physics/math";
 import { waterUniforms } from "@/components/lab/water";
 
@@ -202,7 +203,6 @@ export class CaptureContext {
 export function renderRgb(gl: THREE.WebGLRenderer, scene: THREE.Scene, ctx: CaptureContext): Uint8ClampedArray {
   const { width: W, height: H } = ctx;
   gl.setRenderTarget(ctx.rgb);
-  gl.setViewport(0, 0, W, H);
   gl.clear(true, true, true);
   gl.render(scene, ctx.cam);
   const raw = ctx.read(gl, ctx.rgb);
@@ -379,7 +379,6 @@ export function annotateTargets(
   const { width: W, height: H } = ctx;
   const ids = targets.map((t) => t.id);
   gl.setRenderTarget(ctx.ids);
-  gl.setViewport(0, 0, W, H);
   const all = measure(idPass(gl, scene, ctx, ids, null), W, H, ids.length);
   const annotations: Annotation[] = [];
   const boxes: Record<string, Box> = {};
@@ -435,7 +434,7 @@ export async function uploadDataset(manifest: Manifest, frames: CapturedFrame[])
   for (const f of frames) form.append("files", f.png, f.frame.file);
   let res: Response;
   try {
-    res = await fetch(`${datasetApiBase()}/api/v1/datasets`, { method: "POST", body: form });
+    res = await fetch(`${datasetApiBase()}/api/v1/datasets`, { method: "POST", body: form, headers: authHeaders() });
   } catch {
     throw new Error(`Backend not reachable at ${datasetApiBase()}. Start it, or save the manifest locally.`);
   }

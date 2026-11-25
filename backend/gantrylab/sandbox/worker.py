@@ -100,9 +100,12 @@ def install_audit_hook() -> None:
             )
             if writing and not _inside_home(path):
                 raise PermissionError(f"sandbox blocked write to {path!r}")
-        elif event in ("os.remove", "os.rename", "os.rmdir", "shutil.rmtree", "os.chmod") and args:
-            if not _inside_home(args[0]):
-                raise PermissionError(f"sandbox blocked {event} on {args[0]!r}")
+        elif event in ("os.remove", "os.rename", "os.rmdir", "shutil.rmtree", "os.chmod", "os.link", "os.symlink",
+                       "os.truncate", "os.mkdir") and args:
+            # A rename or link also writes at its destination, and a link makes its source writable through the home.
+            for path in args[:2] if event in ("os.rename", "os.link", "os.symlink") else args[:1]:
+                if not _inside_home(path):
+                    raise PermissionError(f"sandbox blocked {event} on {path!r}")
 
     sys.addaudithook(hook)
 

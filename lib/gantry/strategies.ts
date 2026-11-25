@@ -1,6 +1,6 @@
 // Inspection strategies for the gantry test runner: where the camera goes next during the SCAN phase.
-// Every strategy here is a hand-written heuristic. None is a trained policy; a trained policy would implement the same
-// ScanPlanner interface on the same observation (docs/ARCHITECTURE.md section 6).
+// "learned" is a trained policy (Q-learning, lib/autonomy/nav.ts); every other strategy is a hand-written heuristic.
+// All implement the same ScanPlanner interface on the same observation (docs/ARCHITECTURE.md section 6).
 //
 // The test runner (lib/sim/engine.ts) asks the planner for the next viewpoint each time the carriage has arrived and
 // dwelt; null ends the scan. Planners see only what the rig could know: the carriage position, the detections reported
@@ -8,14 +8,16 @@
 
 import { CAMERA, DETECTION, GANTRY, TEST, clamp } from "../sim/constants";
 import type { Detection } from "../sim/types";
+import { LearnedPlanner, type WaterContext } from "../autonomy/nav";
+import { NAV_WEIGHTS } from "../autonomy/nav-weights";
 
-export type StrategyId = "serpentine" | "coverage" | "detection-driven" | "uncertainty" | "waypoints";
+export type StrategyId = "serpentine" | "coverage" | "detection-driven" | "uncertainty" | "learned" | "waypoints";
 
 export interface StrategyInfo {
   id: StrategyId;
   name: string;
   summary: string;
-  kind: "fixed" | "reactive" | "active-perception";
+  kind: "fixed" | "reactive" | "active-perception" | "learned";
 }
 
 export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
@@ -23,6 +25,7 @@ export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
   coverage: { id: "coverage", name: "Coverage scan", summary: "Boustrophedon spaced from the detection-grade centre of the camera footprint, so every floor cell is imaged.", kind: "fixed" },
   "detection-driven": { id: "detection-driven", name: "Detection-driven", summary: "Serpentine, plus a re-centring visit to every detection reported below the classify threshold.", kind: "reactive" },
   uncertainty: { id: "uncertainty", name: "Uncertainty-driven", summary: "Greedy next-best-view: unimaged cells and low-confidence detections, traded against travel time.", kind: "active-perception" },
+  learned: { id: "learned", name: "Learned (RL)", summary: "Trained by Q-learning on random layouts and waters: picks the next viewpoint, re-centres weak detections, and decides when to stop.", kind: "learned" },
   waypoints: { id: "waypoints", name: "User waypoints", summary: "Visits a user-supplied list of gantry positions in order.", kind: "fixed" },
 };
 
@@ -182,6 +185,7 @@ export function plannedViewpoints(id: StrategyId, waypoints?: readonly (readonly
     case "coverage":
       return coveragePlan();
     case "uncertainty":
+    case "learned":
       return [];
     case "waypoints":
       return (waypoints?.length ? waypoints : TEST.scanWaypoints).map(([x, y]) => [clamp(x, 0, GANTRY.travelX), clamp(y, 0, GANTRY.travelY)] as const);
@@ -192,7 +196,7 @@ export function plannedViewpoints(id: StrategyId, waypoints?: readonly (readonly
   }
 }
 
-export function createPlanner(id: StrategyId, waypoints?: readonly (readonly [number, number])[]): ScanPlanner {
+export function createPlanner(id: StrategyId, waypoints?: readonly (readonly [number, number])[], water?: WaterContext): ScanPlanner {
   switch (id) {
     case "coverage":
       return new ListPlanner("coverage", coveragePlan(), "coverage");
@@ -200,6 +204,8 @@ export function createPlanner(id: StrategyId, waypoints?: readonly (readonly [nu
       return new DetectionDrivenPlanner();
     case "uncertainty":
       return new UncertaintyPlanner();
+    case "learned":
+      return new LearnedPlanner(NAV_WEIGHTS, water ?? { environment: "tank", turbidity: 0.15, lighting: 0.8, gantrySpeed: 0.65, threshold: 0.6 });
     case "waypoints":
       return new ListPlanner("waypoints", (waypoints?.length ? waypoints : TEST.scanWaypoints).map(([x, y]) => [clamp(x, 0, GANTRY.travelX), clamp(y, 0, GANTRY.travelY)] as const), "user");
     case "serpentine":

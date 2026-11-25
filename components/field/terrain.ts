@@ -148,6 +148,8 @@ export const seabedUniforms = {
   uFieldTime: { value: 0 },
   /** horizontal direction ripple crests run across (the flow direction), world xz */
   uRippleDir: { value: new THREE.Vector2(1, 0) },
+  /** seabed reflectance against the environment's own (site parameter) */
+  uSeabedGain: { value: 1 },
 };
 
 /**
@@ -175,6 +177,7 @@ uniform float uSeabedSeed;
 uniform float uFieldCaustic;
 uniform float uFieldTime;
 uniform vec2 uRippleDir;
+uniform float uSeabedGain;
 varying vec3 vSbPos;
 varying vec3 vSbNormal;
 ${GLSL_NOISE}
@@ -257,7 +260,7 @@ if (kind == 0 || kind == 4) {
 // steeper ground sheds fines: a little darker and coarser
 float sbSlope = 1.0 - normalize(vSbNormal).y;
 sbTone *= 1.0 - 0.6 * smoothstep(0.08, 0.5, sbSlope);
-diffuseColor.rgb *= sbTone;`,
+diffuseColor.rgb *= min(sbTone * uSeabedGain, 4.0);`,
       )
       .replace(
         "#include <normal_fragment_maps>",

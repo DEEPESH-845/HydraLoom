@@ -378,6 +378,7 @@ Top-level fields:
 | `confidence_histogram` | 10 bins over [0, 1] for TP and FP predictions |
 | `tp_below_conf_threshold` | Correct detections lost to the operating threshold |
 | `slices`, `slice_ranking`, `sensitivity` | Breakdown by condition and object attribute |
+| `condition_cells` | Joint turbidity x lighting counts (`turbidity`, `lighting`, `n_frames`, `n_gt`, `tp`, `fp`, `fn`) at the confidence threshold; frames missing either condition are in no cell. Absent from runs made before 2026-11-25 |
 | `latency`, `resources` | Measured timings and resource usage |
 | `hardware`, `hardware_profiles` | Selected profile block and every profile block |
 | `simulated` | Present only for mock runs |
@@ -570,8 +571,18 @@ Both runs must be complete.
 | `GANTRYLAB_WORKER_MEM_MB` | 8192 | Worker memory limit |
 | `GANTRYLAB_MAX_CONCURRENT_RUNS` | 1 | Parallel runs |
 | `GANTRYLAB_WARMUP_FRAMES` | 3 | Default warm-up inferences |
+| `GANTRYLAB_API_TOKEN` | empty | Bearer token every write needs; empty leaves writes open (local use only) |
 | `GANTRYLAB_LLM_PROVIDER` | `auto` | Default report provider |
 | `GANTRYLAB_LLM_TIMEOUT_S` | 90 | Provider HTTP timeout |
 | `ANTHROPIC_API_KEY`, `GANTRYLAB_ANTHROPIC_MODEL` | unset, `claude-sonnet-5-5` | Anthropic Messages API |
 | `OPENAI_API_KEY`, `GANTRYLAB_OPENAI_MODEL` | unset, `gpt-4o-mini` | OpenAI chat completions |
 | `GANTRYLAB_OLLAMA_URL`, `GANTRYLAB_OLLAMA_MODEL` | `http://127.0.0.1:11434`, `llama3.1` | Ollama (enabled when either is set) |
+
+## Access token, limits and shutdown (2026-11-25)
+
+- With `GANTRYLAB_API_TOKEN` set, every request other than GET, HEAD and OPTIONS needs `Authorization: Bearer <token>`; without it the answer is 401. `GET /health` reports `write_auth`.
+- A 422 lists `type`, `loc` and `msg`; it does not echo the rejected input.
+- Multipart bodies carry at most 64 text fields under one shared size cap, and must end with the closing boundary.
+- ONNX exports with built-in NMS (end-to-end heads, `nms=True`) are refused with a clear error: export without it.
+- A run stopped by a service shutdown is `failed` with "interrupted by service shutdown"; a model whose inspection was interrupted stays `pending` and is inspected again at startup.
+- A model rejected for a transient reason (an inspection timeout) is returned as it is on re-upload and cannot be retried yet.

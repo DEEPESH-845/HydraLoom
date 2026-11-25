@@ -40,9 +40,12 @@ def decode_yolov8(
     iou_thres: float,
     max_det: int,
     max_wh: float = 7680.0,
+    n_classes: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode a YOLOv8 detect head output of shape (1, 4+nc, N) or (1, N, 4+nc).
 
+    ``n_classes`` (when known) identifies the channel axis and drops the mask or keypoint channels that segment and
+    pose heads append after the class scores.
     Returns (boxes_xyxy[K,4], scores[K], class_ids[K]) in network-input pixel space.
     Class-aware NMS uses the per-class coordinate offset trick.
     """
@@ -51,11 +54,17 @@ def decode_yolov8(
         out = out[0]
     if out.ndim != 2:
         raise ValueError(f"unexpected YOLO output shape {np.asarray(output).shape}")
-    # Channels are the small dimension (4 + nc); anchors are the large one.
-    if out.shape[0] < out.shape[1]:
+    # Without a class count: channels are the small dimension (4 + nc), anchors the large one.
+    # That fails at small imgsz (32 gives 21 anchors), so an axis of exactly 4 + nc wins.
+    nc_axis = 4 + n_classes if n_classes else None
+    if nc_axis in out.shape:
+        if out.shape[0] == nc_axis:
+            out = out.T
+    elif out.shape[0] < out.shape[1]:
         out = out.T
-    if out.shape[1] < 5:
-        raise ValueError("YOLO output has fewer than 5 channels")
+    if out.shape[1] < (nc_axis or 5):
+        raise ValueError(f"unexpected YOLO output shape {np.asarray(output).shape} for {n_classes} classes")
+    out = out[:, :nc_axis]
     cxcywh = out[:, :4].astype(np.float32)
     cls_scores = out[:, 4:].astype(np.float32)
     class_ids = np.argmax(cls_scores, axis=1)
@@ -87,7 +96,7 @@ def letterbox(img: np.ndarray, new_size: int, color: int = 114) -> tuple[np.ndar
 
     h, w = img.shape[:2]
     gain = min(new_size / h, new_size / w)
-    nw, nh = int(round(w * gain)), int(round(h * gain))
+    nw, nh = max(1, int(round(w * gain))), max(1, int(round(h * gain)))
     resized = np.asarray(Image.fromarray(img).resize((nw, nh), Image.BILINEAR))
     canvas = np.full((new_size, new_size, 3), color, dtype=np.uint8)
     px = (new_size - nw) / 2

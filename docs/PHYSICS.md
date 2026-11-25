@@ -105,8 +105,10 @@ Tested invariants: drag opposes relative motion (and pushes forward when the wat
 
 Conventional, hand-tuned controllers; not trained policies.
 
-- ROV: position error to a desired velocity saturated at the cruise speed, velocity error to force with drag feedforward and an integral that learns the steady load (current, buoyancy), heading PD, roll and pitch self-levelling.
-  Tested: holds station within 5 cm in a 0.4 m/s cross current, and drifts away when the current exceeds its thrust (about 1.6 m/s).
+- ROV: position error to a desired velocity saturated at the cruise speed, velocity error to force with the commanded acceleration and the drag in the measured current fed forward and a small integral for the rest (buoyancy), heading to a turn rate, roll and pitch self-levelling.
+  The measured current is the simulated DVL's water track, without sensor noise (assumption).
+  Manual flight uses the same loop: the sticks are velocities over ground, 2 m/s2 to speed up and 3 m/s2 to brake, and a centred stick keeps position, depth and heading.
+  Tested: holds station within 5 cm in a 0.4 m/s cross current, and drifts away when the current exceeds its thrust (0.90 m/s from ahead, 0.77 m/s from the side).
 - AUV: speed PI through the water; line-of-sight path following with a 6 m lookahead; heading to turn-rate command to rudder; depth or altitude to pitch to pitch-rate command to elevator, with integrals for trim.
   It cannot hover: HOLD means loiter.
   Tested: completes a lawnmower survey in a cross current with depth error under 1.5 m after the initial transient.
@@ -133,20 +135,36 @@ This is not a neural network.
 It estimates whether a reasonable detector could see an object from the current pose through the current water.
 Real model evaluation uses rendered frames and the backend (`docs/ARCHITECTURE.md` section 5).
 
-`confidence = detectability * geometry * water * light * size * blur * (1 - occluded)^1.5 +- 0.01 seeded jitter`
+`confidence = detectability * geometry * evidence * size * blur +- 0.01 seeded jitter`
 
 - geometry: `1 - 0.30 r^2 - 0.15 burial`, the lab's term.
-- water: `waterDetectability(contrastRatio(...))` with the lab's optics (`lib/optics/water.ts`): per-channel attenuation `c` over the lens-to-object path and veiling light from `rInf`, with the environment's seabed as the background.
+- evidence: the mean of `water * light` over the best-seen 35 percent of the surface patches that face the camera, each with its own path; patches out of frame, or hidden from the lens by terrain or a structure, count as zero.
+  The 35 percent agrees with the trained models below: mean confidence 0.61 with 20 to 30 percent of an object visible, 0.75 at 30 to 40, 0.89 at 40 to 60.
+  The wreck is judged by the hull that is drawn (no bow, low deck, deckhouse aft, 12 degree list) standing on the real terrain, not by a solid box.
+  In murky water the only readable views are close ones, where a 5 m wreck can never show 35 percent of itself, so the evidence is the larger of that and `0.95 *` the readable share of the picture over 30 percent (ray grid against the target's exposed box).
+  Until 2026-11-25 the whole box had to be in front of the lens with 30 percent of it in frame, and the path was measured to the box centre: a wreck was rejected at every range at which 2 m visibility could show it.
+- water: `contrastSignal(contrastRatio(...))` with the lab's optics (`lib/optics/water.ts`): per-channel attenuation `c` over the lens-to-patch path and veiling light from `rInf`, with the environment's seabed as the background.
+  Linear in log contrast from 0 at 2 percent (Koschmieder) to 1 at 5 percent.
+  Calibrated on YOLOv8n trained on rendered frames and tested on 173 objects in 72 held-out frames of the lab twin: with murky water in the training set every object was found at 3 to 5 percent contrast (confidence about 0.9); trained on clear water only, the network was blind below 8 percent.
+  Limits of that evidence: few wreck frames, rendered (noise-free) images, the lab tank and one architecture. Until 2026-11-25 it was an assumed 20 percent, which left a wreck undetected that the camera picture plainly showed.
   Daylight paths: object lit at its depth, veil lit at the path midpoint; lamp paths: object lit over the viewing distance, veil half way.
   Stratified layers add their particles over the part of the path inside the layer.
-- light: shot-noise-limited signal, the square root of daylight at the object's depth (`exp(-Kd z)`, normalised to 5 percent of surface irradiance) plus lamp irradiance `power exp(-Kd d) (d_ref / d)^2`, with `d_ref = 2.5 m * sqrt(lumens / 6000)`.
+- light: shot-noise-limited signal, the square root of daylight at the object's depth (`exp(-Kd z)`) plus lamp irradiance `power exp(-Kd d) (d_ref / d)^2`, both against 50 lux on the object: about 75 electrons per pixel for a low-light camera at 1/120 s, a signal-to-noise ratio near 9.
+  That is 0.05 percent of 100 klx daylight, and `d_ref = 5.6 m * sqrt(lumens / 6000)` for a 135 degree lamp set.
+  The previous references (5 percent of daylight, 2.5 m) were 5000 lux and 250 lux: 100 and 5 times this.
   Lamp light and the veil it causes are not separated in this term; contrast is computed from the daylight model, which overestimates contrast for lamp light in turbid surface water.
 - size: smoothstep of the projected size from 6 to 28 px.
 - blur: `1 / (1 + (b / 8)^2)` with `b = exposure * f * (lateral speed / distance + turn rate)` in pixels.
-- occlusion: five rays (centre and top corners) against the terrain and solid structures.
-- Class: true class at or above 0.65 (with 0.03 hysteresis), else a deterministic confusion (TIRE and PIPELINE read as DEBRIS, others as UNKNOWN).
+- occlusion: every point that counts as evidence is traced to the lens. It used to be five samples and a penalty, so one point under uneven seabed turned SHIPWRECK into UNKNOWN.
+- Class: true class at or above 0.65 (a track keeps the class it was once recognised as while it lasts), else a deterministic confusion (TIRE and PIPELINE read as DEBRIS, others as UNKNOWN).
 
-Tested invariants: confidence never rises with turbidity at a fixed pose; lamp light falls with distance and is zero with the lamps off; the on-axis point projects to the image centre for any attitude.
+The ROV camera tilts (5 to 85 degrees below the horizon, 20 degrees/s). By hand and in Hold it keeps the seabed at the working range in the middle of the picture, and a detected target once there is one; missions use the mount angle, 30 degrees.
+The survey altitude is planned at 94 percent of the working range for the ROV and 88 percent for the AUV.
+The survey altitude and the stand-off come from `workingRange`: the longest range at which 85 percent of that same signal survives, projected through the camera tilt and measured from the target's near surface.
+Confidence is a track: each 10 Hz reading enters with weight 0.5, and a track below the threshold coasts for up to 0.6 s while its object is still in the picture, keeping its label.
+A mission holds for 2 s at its last viewpoint before it completes, and finds made while piloting by hand are recorded (`engine.finds()`).
+
+Tested invariants: the ROV detection mission classifies the wreck in every environment; every target can reach its true class in ideal conditions; nothing is found at maximum harbor turbidity; confidence never rises with turbidity at a fixed pose; lamp light falls with distance and is zero with the lamps off; the on-axis point projects to the image centre for any attitude.
 
 ## 8. Fidelity levels and open assumptions
 
@@ -158,3 +176,27 @@ Tested invariants: confidence never rises with turbidity at a fixed pose; lamp l
 | Contacts | Kinematic constraint | No impact dynamics or friction model beyond a sliding factor. |
 | Detector (field) | Analytical | Not a learned model; use the backend for real inference. |
 | Hardware performance | Measured on the host where run; estimated otherwise | Raspberry Pi figures are estimates until measured on the device. |
+
+## 9. Site parameters (`lib/field/site.ts`)
+
+What a survey can measure about a place, beyond turbidity, light and current.
+One function, `effectiveEnv`, turns them into the environment that the physics, the detector, the renderer, the capture and the results all read, so they cannot disagree.
+The defaults reproduce the library environment bit for bit (tested).
+
+| Parameter | What it changes |
+|---|---|
+| Temperature, salinity | Density and viscosity (section 3), buoyancy; auto ballast re-trims the vehicle |
+| Dissolved organics at 440 nm | Absorption, `a_g exp(-0.014 (lambda - 440))`; it also darkens the veil, so in silty water a little can lengthen the contrast range |
+| Attenuation per NTU | Particle beam attenuation: the number a calibration of the real site replaces |
+| Particle albedo, backscatter ratio | Scattering and veil |
+| Seabed reflectance | Contrast background and the drawn seabed |
+| Extra burial, growth | Target burial and pose; detectability falls to 55 percent at full growth (assumption) |
+| Sun elevation | Surface daylight (`sin(e)` times Fresnel transmission, 1 at 48.6 degrees) and Kirk's `mu0` in `Kd` |
+| Waves | Linear theory orbital velocity added to the current, dispersion solved for the site depth |
+| Turbid layer | Extra NTU over the part of every path inside it |
+| Camera exposure | Light gathered and motion smear, in proportion |
+
+Sets are kept jointly possible: water is never below its freezing point, waves never past breaking (0.78 of the depth, or a steepness of 0.142 tanh kh), the layer inside the column.
+`checkConditions` says before a run what will not work, with numbers.
+Presets are representative conditions of each place, not measurements.
+The sensitivity test (`lib/field/sweep.ts`) repeats a mission over values of one parameter in headless engines and reports the range in which at least 80 percent of targets are classified.

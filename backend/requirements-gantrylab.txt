@@ -1,0 +1,18 @@
+# The evaluation service without torch (which needs its own index; see Dockerfile and scripts/backend.sh).
+# Same pins as pyproject.toml.
+fastapi==0.165.0
+starlette==1.10.0
+uvicorn[standard]==0.54.0
+websockets==17.4
+python-multipart==0.0.34
+pydantic==2.14.4
+numpy==2.5.4
+pillow==13.0.0
+psutil==7.2.2
+pyyaml==6.0.3
+httpx==0.28.1
+ultralytics==8.4.215
+onnx==1.23.2
+onnxruntime==1.32.0
+pytest==9.2.0
+httpx2==2.16.2

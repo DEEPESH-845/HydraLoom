@@ -5,10 +5,11 @@ import type { ReactNode } from "react";
 /**
  * GANTRYLAB top bar with the workspace nav, shared by every non-3D workspace.
  * Routes: 01 Environment, 02 Platform and 03 Simulation live in the field world at the root route (/),
- * 04 Model Lab at /models, 05 Analysis and 06 Reports at /reports, plus the Gantry Lab (/lab).
+ * 04 Model Lab at /models, 05 Analysis and 06 Reports at /reports, 07 Benchmark, 08 Autonomy and 09 Hardware, plus the
+ * Gantry Lab (/lab).
  */
 
-export type WorkspaceId = "environment" | "platform" | "simulation" | "models" | "analysis" | "reports" | "lab";
+export type WorkspaceId = "environment" | "platform" | "simulation" | "models" | "analysis" | "reports" | "benchmark" | "autonomy" | "hardware" | "lab";
 
 export const WORKSPACES: { id: WorkspaceId; n: string; label: string; href: string; title: string }[] = [
   { id: "environment", n: "01", label: "Environment", href: "/", title: "Environment explorer in the field 3D world" },
@@ -17,6 +18,9 @@ export const WORKSPACES: { id: WorkspaceId; n: string; label: string; href: stri
   { id: "models", n: "04", label: "Model Lab", href: "/models", title: "Upload and evaluate detection models" },
   { id: "analysis", n: "05", label: "Analysis", href: "/reports", title: "Performance analysis of evaluation runs" },
   { id: "reports", n: "06", label: "Reports", href: "/reports#engineering-reports", title: "AI engineering reports" },
+  { id: "benchmark", n: "07", label: "Benchmark", href: "/benchmark", title: "Compare several models: best and failing conditions, what to change" },
+  { id: "autonomy", n: "08", label: "Autonomy", href: "/autonomy", title: "Learned gantry navigation and automatic model switching" },
+  { id: "hardware", n: "09", label: "Hardware", href: "/hardware", title: "The physical gantry: connect, test, analyse, report" },
 ];
 
 export function WorkspaceNav({ active, right }: { active: WorkspaceId | WorkspaceId[]; right?: ReactNode }) {
@@ -26,7 +30,7 @@ export function WorkspaceNav({ active, right }: { active: WorkspaceId | Workspac
       data-eval="header"
       className="sticky top-0 z-30 flex h-12 shrink-0 items-center justify-between gap-3 border-b border-line/70 bg-ground/95 px-4 max-[479px]:px-3"
     >
-      <Link href="/" className="flex min-w-0 items-center gap-3" aria-label="GANTRYLAB home">
+      <Link href="/" prefetch={false} className="flex min-w-0 items-center gap-3" aria-label="GANTRYLAB home">
         <span className="whitespace-nowrap font-mono text-[13px] font-semibold tracking-[0.28em] text-text max-[479px]:text-[12px] max-[479px]:tracking-[0.18em]">
           GANTRYLAB
         </span>
@@ -52,7 +56,7 @@ export function WorkspaceNav({ active, right }: { active: WorkspaceId | Workspac
                   "label",
                   isOn ? "text-teal" : "text-muted group-hover:text-text",
                   // only the active label survives on narrow screens; numbers carry the rest
-                  !isOn && "max-[1099px]:hidden",
+                  !isOn && "max-[1399px]:hidden",
                   isOn && "max-[599px]:hidden",
                 )}
               >
@@ -64,6 +68,7 @@ export function WorkspaceNav({ active, right }: { active: WorkspaceId | Workspac
         <span className="mx-1 my-3 w-px shrink-0 bg-line max-[479px]:mx-0.5" aria-hidden />
         <Link
           href="/lab"
+          prefetch={false}
           title="Gantry Lab: the aquarium and XY gantry digital twin"
           aria-current={on("lab") ? "page" : undefined}
           className={clsx(

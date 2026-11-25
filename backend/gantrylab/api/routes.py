@@ -79,6 +79,7 @@ def health(request: Request) -> HealthResponse:
         llm_providers=provider_status(),
         llm_default=s.llm_provider,
         data_dir_writable=writable,
+        write_auth=bool(s.api_token),
         limits={"max_model_mb": s.max_model_mb, "max_dataset_frames": s.max_dataset_frames,
                 "max_frame_mb": s.max_frame_mb, "max_dataset_mb": s.max_dataset_mb,
                 "worker_timeout_s": s.worker_timeout_s, "worker_mem_mb": s.worker_mem_mb},
@@ -222,6 +223,7 @@ def get_predictions(run_id: str, request: Request) -> JSONResponse:
 async def run_events(websocket: WebSocket, run_id: str) -> None:
     st = websocket.app.state.gl
     await websocket.accept()
+    incoming: asyncio.Task | None = None
     try:
         try:
             raw = st.runs.get_raw(run_id)
@@ -230,6 +232,8 @@ async def run_events(websocket: WebSocket, run_id: str) -> None:
             await websocket.close(code=4404)
             return
         seq = 0
+        # Pending receive: the only way to notice a client that left (or a server shutdown) while no event is due.
+        incoming = asyncio.create_task(websocket.receive())
         if not st.runs.events_since(run_id, 0):
             # Unknown in memory (for example after a restart): send a snapshot.
             await websocket.send_json({"run_id": run_id, "seq": 0, "type": "status", "status": raw["status"],
@@ -251,10 +255,17 @@ async def run_events(websocket: WebSocket, run_id: str) -> None:
                                                "status": cur["status"], "progress": cur["progress"],
                                                "message": cur["message"], "ts": cur.get("finished_at") or ""})
                     break
-            await asyncio.sleep(0.2)
+            await asyncio.wait({incoming}, timeout=0.2)
+            if incoming.done():
+                if incoming.result()["type"] == "websocket.disconnect":
+                    return
+                incoming = asyncio.create_task(websocket.receive())
         await websocket.close()
     except WebSocketDisconnect:
         return
+    finally:
+        if incoming is not None:
+            incoming.cancel()
 
 
 # ---------------------------------------------------------------------------

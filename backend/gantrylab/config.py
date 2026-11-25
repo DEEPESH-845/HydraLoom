@@ -47,6 +47,8 @@ class Settings:
     llm_provider: str
     llm_timeout_s: float
     warmup_frames: int
+    #: Bearer token every write needs; empty leaves writes open (local use).
+    api_token: str = field(default="", repr=False)
     extra: dict = field(default_factory=dict)
 
     @property
@@ -93,4 +95,5 @@ def load_settings(data_dir: str | Path | None = None) -> Settings:
         llm_provider=os.environ.get("GANTRYLAB_LLM_PROVIDER", "auto").strip().lower() or "auto",
         llm_timeout_s=_env_float("GANTRYLAB_LLM_TIMEOUT_S", 90.0),
         warmup_frames=max(0, _env_int("GANTRYLAB_WARMUP_FRAMES", 3)),
+        api_token=os.environ.get("GANTRYLAB_API_TOKEN", "").strip(),
     )

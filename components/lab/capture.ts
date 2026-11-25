@@ -2,6 +2,7 @@
 
 import * as THREE from "three";
 import { CAMERA, GANTRY, TANK, gantryToWorld } from "@/lib/sim/constants";
+import { CONDITION_GRID } from "@/lib/bench/profile";
 import { projectToFeed } from "@/lib/sim/detection";
 import { environmentNtu, ENVIRONMENTS } from "@/lib/sim/environments";
 import { mulberry32 } from "@/lib/sim/rng";
@@ -36,7 +37,7 @@ import { waterUniforms } from "./water";
  * make the sliders jump and the live detector see the sweep).
  */
 
-export type LabCapturePreset = "jitter" | "raster" | "turbidity" | "lighting";
+export type LabCapturePreset = "jitter" | "raster" | "turbidity" | "lighting" | "grid";
 
 export interface LabCaptureOptions {
   preset: LabCapturePreset;
@@ -74,6 +75,11 @@ export function labViewpoints(o: LabCaptureOptions, from: { x: number; y: number
       return [0, 0.25, 0.5, 0.75, 1].map((t) => at(from.x, from.y, t));
     case "lighting":
       return [0.2, 0.4, 0.6, 0.8, 1].map((l) => at(from.x, from.y, from.turbidity, l));
+    case "grid": {
+      // every turbidity x lighting cell, from six viewpoints that image every object at least once
+      const spots: [number, number][] = [[15, 10], [50, 10], [85, 10], [85, 30], [50, 30], [15, 30]];
+      return CONDITION_GRID.flatMap(([t, l]) => spots.map(([x, y]) => at(x + (rand() - 0.5) * 8, y + (rand() - 0.5) * 6, t, l)));
+    }
     case "jitter":
     default:
       return Array.from({ length: Math.max(1, Math.min(200, Math.round(o.count))) }, () => at(from.x + (rand() - 0.5) * 16, from.y + (rand() - 0.5) * 10));

@@ -58,6 +58,10 @@ class OnnxAdapter(InferenceAdapter):
         self.session = ort.InferenceSession(model_path, sess_options=opts, providers=providers)
         meta = self.session.get_modelmeta().custom_metadata_map or {}
         self.names = parse_names(meta.get("names"))
+        if meta.get("end2end") == "True" or "'nms': True" in meta.get("args", ""):
+            # Rows of (xyxy, conf, class) would be decoded as a raw head and evaluated as garbage.
+            raise ValueError("ONNX export with built-in NMS (end2end or nms=True) is not supported; "
+                             "export with end2end=False and nms=False")
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name
         shape = inp.shape
@@ -87,7 +91,8 @@ class OnnxAdapter(InferenceAdapter):
         t1 = time.perf_counter()
         out = self.session.run(None, {self.input_name: x})[0]
         t2 = time.perf_counter()
-        boxes, scores, cls = decode_yolov8(out, self.cfg.conf_floor, self.cfg.iou, self.cfg.max_det)
+        boxes, scores, cls = decode_yolov8(out, self.cfg.conf_floor, self.cfg.iou, self.cfg.max_det,
+                                             n_classes=len(self.names))
         h, w = img.shape[:2]
         dets: list[Detection] = []
         for b, s, c in zip(boxes, scores, cls):

@@ -211,9 +211,10 @@ def _resolve_ultralytics(module: str, name: str) -> Any:
         raise _deny(module, name, "only nn.Module classes are allowed")
     if any(module == p or module.startswith(p + ".") for p in ULTRALYTICS_UTILS_CLASS_MODULES):
         obj = _import_attr(module, name)
-        if isinstance(obj, type):
+        # A dotted name ("torch.os._wrap_close") can walk out of the module, so check where the class is defined.
+        if isinstance(obj, type) and obj.__module__ in ULTRALYTICS_UTILS_CLASS_MODULES:
             return obj
-        raise _deny(module, name, "only classes are allowed")
+        raise _deny(module, name, "only classes defined in this module are allowed")
     raise _deny(module, name)
 
 

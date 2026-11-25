@@ -46,11 +46,15 @@ def is_safe_id(value: str) -> bool:
 def write_json_atomic(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False, default=_json_default)
-        fh.flush()
-        os.fsync(fh.fileno())
-    _retry_on_sharing_violation(lambda: os.replace(tmp, path))
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False, default=_json_default)
+            fh.flush()
+            os.fsync(fh.fileno())
+        _retry_on_sharing_violation(lambda: os.replace(tmp, path))
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _retry_on_sharing_violation(fn: Any, attempts: int = 50, delay: float = 0.02) -> Any:

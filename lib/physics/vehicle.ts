@@ -114,6 +114,47 @@ export interface Collider {
   bed: (x: number, z: number) => number;
   /** vertical cylinders the hull cannot enter */
   cylinders: { x: number; z: number; radius: number }[];
+  /** solid boxes (yaw only) the hull cannot enter, e.g. a wreck */
+  boxes?: SolidBox[];
+  /** the water the vehicle may be in: it can never leave this rectangle */
+  bounds?: { x0: number; x1: number; z0: number; z1: number };
+}
+
+export interface SolidBox {
+  x: number;
+  z: number;
+  yawDeg: number;
+  hx: number;
+  hz: number;
+  /** world Y of the top */
+  top: number;
+}
+
+/** Horizontal position in a box's own frame. */
+export function toBox(b: SolidBox, x: number, z: number): { lx: number; lz: number; c: number; s: number } {
+  const r = (b.yawDeg * Math.PI) / 180;
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  const dx = x - b.x;
+  const dz = z - b.z;
+  return { lx: dx * c - dz * s, lz: dx * s + dz * c, c, s };
+}
+
+/** Horizontal gap to a box and the unit normal pointing away from it; negative inside. */
+export function boxGap(b: SolidBox, x: number, z: number): { d: number; nx: number; nz: number } {
+  const { lx, lz, c, s } = toBox(b, x, z);
+  const ox = Math.abs(lx) - b.hx;
+  const oz = Math.abs(lz) - b.hz;
+  let nlx: number;
+  let nlz: number;
+  let d: number;
+  if (ox > 0 && oz > 0) {
+    d = Math.hypot(ox, oz);
+    nlx = (Math.sign(lx) * ox) / d;
+    nlz = (Math.sign(lz) * oz) / d;
+  } else if (ox > oz) [d, nlx, nlz] = [ox, Math.sign(lx) || 1, 0];
+  else [d, nlx, nlz] = [oz, 0, Math.sign(lz) || 1];
+  return { d, nx: nlx * c + nlz * s, nz: -nlx * s + nlz * c };
 }
 
 export const zeroCommand = (): VehicleCommand => ({ force: [0, 0, 0], moment: [0, 0, 0], rudder: 0, elevator: 0 });
@@ -269,10 +310,15 @@ export function stepVehicle(p: VehicleParams, s: VehicleState, cmd: VehicleComma
     const bed = collider.bed(s.position[0], s.position[2]);
     if (s.position[1] - reach < bed) {
       s.position[1] = bed + reach;
-      clipWorldVelocity(s, [0, -1, 0]);
-      // sliding friction on the bed
+      // the part of the velocity into the slope is lost, the rest slides along it with friction (time constant 0.4 s)
+      const h = 0.15;
+      const gx = (collider.bed(s.position[0] + h, s.position[2]) - collider.bed(s.position[0] - h, s.position[2])) / (2 * h);
+      const gz = (collider.bed(s.position[0], s.position[2] + h) - collider.bed(s.position[0], s.position[2] - h)) / (2 * h);
+      const nl = Math.hypot(gx, 1, gz);
+      clipWorldVelocity(s, [gx / nl, -1 / nl, gz / nl]);
       const vw = qRotate(s.attitude, s.velocity);
-      s.velocity = qRotateInv(s.attitude, [vw[0] * 0.9, vw[1], vw[2] * 0.9]);
+      const k = Math.exp(-dt / 0.4);
+      s.velocity = qRotateInv(s.attitude, [vw[0] * k, vw[1], vw[2] * k]);
       s.contact = true;
     }
     const hr = Math.max(p.halfExtents[0], p.halfExtents[2]);
@@ -289,6 +335,32 @@ export function stepVehicle(p: VehicleParams, s: VehicleState, cmd: VehicleComma
         clipWorldVelocity(s, [-nx, 0, -nz]);
         s.contact = true;
       }
+    }
+    for (const b of collider.boxes ?? []) {
+      if (s.position[1] - reach >= b.top) continue;
+      const g = boxGap(b, s.position[0], s.position[2]);
+      if (g.d >= hr) continue;
+      const up = b.top + reach - s.position[1];
+      if (up < hr - g.d) {
+        // nearly clear of the top: rest on it instead of being thrown sideways
+        s.position[1] = b.top + reach;
+        clipWorldVelocity(s, [0, -1, 0]);
+      } else {
+        s.position[0] += g.nx * (hr - g.d);
+        s.position[2] += g.nz * (hr - g.d);
+        clipWorldVelocity(s, [-g.nx, 0, -g.nz]);
+      }
+      s.contact = true;
+    }
+    if (collider.bounds) {
+      const { x0, x1, z0, z1 } = collider.bounds;
+      const p0 = s.position;
+      if (p0[0] < x0 + hr) clipWorldVelocity(s, [-1, 0, 0]);
+      if (p0[0] > x1 - hr) clipWorldVelocity(s, [1, 0, 0]);
+      if (p0[2] < z0 + hr) clipWorldVelocity(s, [0, 0, -1]);
+      if (p0[2] > z1 - hr) clipWorldVelocity(s, [0, 0, 1]);
+      p0[0] = Math.min(x1 - hr, Math.max(x0 + hr, p0[0]));
+      p0[2] = Math.min(z1 - hr, Math.max(z0 + hr, p0[2]));
     }
   }
   return { thrust: [...thrust], damping, fins, restoring, total: F, moment: M, rho };

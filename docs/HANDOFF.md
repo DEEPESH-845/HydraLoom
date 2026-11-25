@@ -154,6 +154,42 @@ Every defect is listed with its reproduction, root cause and regression test in 
 - The lab dataset capture passes its sweep conditions straight to `labWater` / `labFeedPass`; it never writes the live scenario.
 - Legacy backend (`main.py`, `serial_bridge.py`, `hal/broker.py`): a port that fails to open is reported as such, one reader per port, reconnect on read failure, stale packets served as offline, non-object JSON ignored, malformed `/ws/command` messages answered with `{"type": "ERROR"}` instead of closing the socket, unknown modes and non-finite PWM rejected, the physics thread survives a bad step, `SENSOR_LOSS` affects depth and restores the baseline noise.
 
+### Shipwreck detection, benchmark, autonomy and hardware (2026-11-25)
+
+- The field detector never classified a wreck in any environment, and found nothing at all in harbor, river and lake.
+  Root causes: the whole box had to be in frame and in front of the lens; the water path was measured to the box centre; the survey altitude ignored the camera tilt, so the slant path was beyond the visibility; the stand-off was measured from the target centre, inside the wreck; the reef wreck's detectability made its class unreachable; a mission ended the instant it arrived at its last viewpoint; finds made by hand were not recorded.
+  Fixed in `lib/field` and `lib/missions`; regression tests in `lib/field/field.test.ts` and `e2e/field.spec.ts`.
+- Navigation: vehicles could leave the site by up to 155 m, climb onto land, fly through targets and spin at 135 degrees per second.
+  Now `stepVehicle` enforces the site rectangle, the quay and solid target boxes; `guardCommand` (the last thing every command passes through) slows the vehicle before any edge, obstacle, the bed or the surface; sticks, velocity commands and yaw rates are slewed; ROV altitude follows the ground ahead and climbs over obstacles; the outward current fades over the last 3 m of the site.
+  Measured on a real GPU: the chase camera advances within 3.7 percent of evenly per frame.
+- Guided detection: AUV detection and localization fly straight passes over every target; the ROV faces each viewpoint and dwells; open exploration is spaced to finish in about 12 minutes; long objects are judged by the segment in view; tracks are smoothed and coast for up to 0.6 s.
+  ROV and AUV detection missions classify all or all but one target in every site except the river (4 of 6 or better: 1.5 m visibility in a current faster than the vehicle) and the ocean AUV (4 of 6).
+- Feed boxes are reprojected every frame; the pilot view draws them full screen; the detection strip stays on screen in every view.
+- `E2E_GPU=metal` (macOS) or `E2E_GPU=gl` runs Playwright on the real GPU; software GL runs the field at 3 to 6 fps and starves timing-sensitive tests.
+- `/benchmark`, `/autonomy` and `/hardware` with their libraries: `docs/AUTONOMY.md`, which also lists what is still missing.
+- The model sandbox failed every spawn on macOS (`RLIMIT_AS` cannot be lowered there); the RSS watchdog is the memory limit on that platform.
+
+### Retina, site parameters and deployment (2026-11-25, later)
+
+- High-density displays: three's `setViewport` and `setScissor` take CSS pixels, and the code passed device pixels, so at any ratio but 1 the 3D view was scaled and off-centre, the camera feed panel showed part of the main view, and captured frames did not match their labels. Every dataset captured on a Retina display before this fix has misaligned labels: capture again. `e2e/retina.spec.ts` covers ratios 1, 2 and 3.
+- 17 site parameters, presets, checks and the sensitivity test (`docs/PHYSICS.md` section 9).
+- `docs/DEPLOY.md`, CI, a container for the evaluation backend (the old `backend/Dockerfile` shipped the legacy service; it is `Dockerfile.edge` now), write token, security headers.
+
+### Manual flight (2026-11-25, later)
+
+- The ROV's manual sticks used to be raw thrust: let go and it coasted, then drifted with the current for ever. They are velocities over ground now (full stick is where thrust meets drag, 0.90 m/s ahead, 0.77 m/s sideways, 0.6 m/s vertical), and a centred stick brakes and keeps position, depth and heading (`RovPilot.fly`). `pilotTarget.assist = false` is the raw thrust, for tests of the water's push.
+- The autopilot and manual flight share one velocity loop (`RovPilot.track`): commanded acceleration and drag in the measured current are fed forward.
+- A current above the thrusters still carries the vehicle (about 0.9 m/s for the ROV). The place it keeps follows within 0.5 m, so it does not race back.
+- The AUV cannot hover: it brakes with its propeller and then drifts; Hold circles.
+- A key or pad cannot stay pressed: Option, Cmd, focus loss, a hidden tab and a closing card all release it.
+
+### Wreck detection (2026-11-25, last)
+
+- The analytical detector was blinder than its own picture. Causes, each measured: an assumed 20 percent contrast limit (real YOLO: 3 to 5), light references of 5000 and 250 lux (50 is enough), five occlusion samples, a solid box instead of the broken hull, a camera fixed 30 degrees down, and a start at transit depth instead of working altitude. `docs/PHYSICS.md` section 7 has the numbers.
+- When nothing is read and a target is ahead, the strip says how far the camera reads in this water.
+- The harbor (2.4 m visibility) and river (1.5 m) still need the rover within about 2 m and 1 m of the hull: that is the water.
+- Results and reports from before this change are not comparable with later ones.
+
 ## 7. Known limitations and open items
 
 - Preset E is a below-waterline housing shot (art audit); the original "engineering close-up of the carriage" is reachable by orbiting from E, not a preset.

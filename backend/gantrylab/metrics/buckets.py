@@ -92,11 +92,12 @@ def dynamic_numeric_edges(values: list[float], n_bins: int = 4) -> list[tuple[fl
     if hi <= lo:
         return [(lo, math.inf, f"{lo:g}")]
     step = (hi - lo) / n_bins
+    starts = [lo + i * step for i in range(n_bins)]
+    # Slices are grouped by label, so print as many digits as it takes to keep the bin edges distinct.
+    digits = next((d for d in range(3, 17) if len({f"{a:.{d}g}" for a in starts}) == n_bins), 17)
     edges = []
-    for i in range(n_bins):
-        a = lo + i * step
-        b = lo + (i + 1) * step if i < n_bins - 1 else math.inf
-        label = f"{a:.3g}-{b:.3g}" if not math.isinf(b) else f">={a:.3g}"
+    for a, b in zip(starts, [*starts[1:], math.inf]):
+        label = f"{a:.{digits}g}-{b:.{digits}g}" if not math.isinf(b) else f">={a:.{digits}g}"
         edges.append((a, b, label))
     return edges
 
@@ -107,5 +108,5 @@ def occlusion_value(attrs: dict) -> float | None:
         return float(occ)
     vis = attrs.get("visible_fraction")
     if isinstance(vis, (int, float)):
-        return 1.0 - float(vis)
+        return round(1.0 - float(vis), 9)  # 1 - 0.9 is 0.0999..., which belongs to the next bucket
     return None

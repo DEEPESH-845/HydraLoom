@@ -3,14 +3,14 @@
 import * as THREE from "three";
 import { weather } from "@/components/lab/weathering";
 import { mulberry32 } from "@/lib/sim/rng";
-import type { TargetInstance } from "@/lib/field/detection";
+import { WRECK_LIST, WRECK_SCALE, type TargetInstance } from "@/lib/field/detection";
 import type { TargetSpec } from "@/lib/world/schema";
 import { fbm3, merge, paint, std } from "./common";
 
 /*
  * Ground-truth targets at real scale. Every model is built inside its declared half extents (x length, y height,
  * z width) around its origin, which is the box centre the analytical detector projects (lib/field/detection.ts
- * targetCorners), so the rendered object and the analytic box agree. The root group of each target carries
+ * surfacePatches), so the rendered object and the analytic box agree. The root group of each target carries
  * userData.gtId and userData.gtClass; the dataset capture reads those to colour its instance-id pass.
  * Mines are inert training targets and are labelled as such on the casing.
  */
@@ -119,8 +119,8 @@ function wreck(hx: number, hy: number, hz: number, seed: number): THREE.Group {
   mesh.receiveShadow = true;
   // listing 12 degrees to port, settled in the seabed
   const list = new THREE.Group();
-  list.rotation.x = -0.21;
-  list.scale.set(1, 0.96, 0.96);
+  list.rotation.x = WRECK_LIST;
+  list.scale.set(1, WRECK_SCALE, WRECK_SCALE);
   list.add(mesh);
   const hm = new THREE.Mesh(merge(holes), std({ color: "#0c0d0d", roughness: 1 }));
   list.add(hm);

@@ -7,6 +7,7 @@ import { useFieldStore } from "@/lib/field/store";
 import { MISSIONS } from "@/lib/missions";
 import { datasetApiBase, runCapture, saveJson, uploadDataset, type CapturePreset, type CapturedFrame, type Manifest } from "@/components/field/capture";
 import { captureTarget } from "@/components/field/runtime";
+import { SweepSection } from "./SweepSection";
 import { CardHead, Btn, Row, Section, Segmented, SimTag, f1, f2, pct } from "./ui";
 
 export function AnalysisCard() {
@@ -14,8 +15,10 @@ export function AnalysisCard() {
     <div>
       <CardHead index="05 Analysis" title="Live analysis" note="Detections come from the ANALYTICAL detector: a physically based confidence model, not a trained network." right={<SimTag />} />
       <Detections />
+      <Finds />
       <Result />
       <Events />
+      <SweepSection />
       <CaptureDataset />
     </div>
   );
@@ -36,6 +39,32 @@ function Detections() {
               </span>
               <span className="text-text">
                 {pct(d.confidence, 1)} <span className="text-dim">at {f1(d.distance)} m</span> <span className={d.correct ? "text-teal" : "text-danger"}>{d.correct ? "correct" : `true ${d.trueClass}`}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/** Everything found since the last reset or mission start, including finds made while piloting by hand. */
+function Finds() {
+  const finds = useFieldStore((s) => s.finds);
+  const total = useFieldStore((s) => s.engine.targets.length);
+  return (
+    <Section title={`Found so far (${finds.length} of ${total})`} right={<SimTag>ANALYTICAL</SimTag>}>
+      {finds.length === 0 ? (
+        <p className="text-[11px] text-dim">Nothing found yet. Run a mission or fly the platform close to a target by hand.</p>
+      ) : (
+        <ul className="space-y-0.5" data-testid="finds">
+          {finds.map((d) => (
+            <li key={d.targetId} className="value flex items-baseline justify-between gap-2 text-[11px]">
+              <span className={d.correct ? "text-teal" : "text-amber"}>
+                {d.class} <span className="text-dim">{d.targetId}</span>
+              </span>
+              <span className="text-text">
+                best {pct(d.confidence, 1)} <span className="text-dim">at {f1(d.distance)} m</span>
               </span>
             </li>
           ))}
@@ -173,10 +202,11 @@ function CaptureDataset() {
           { id: "mission", label: "Mission path", disabled: !vehicle, title: vehicle ? "" : "The station does not move" },
           { id: "turbidity", label: "Turbidity sweep" },
           { id: "lighting", label: "Lighting sweep" },
+          { id: "grid", label: "Condition grid", title: "Every turbidity x lighting cell of the benchmark; Frames sets the poses per cell (at most 20)" },
         ]}
       />
       <div className="mt-2 grid grid-cols-2 gap-2 min-[560px]:grid-cols-4">
-        <NumField label="Frames" value={frames} min={1} max={200} onChange={setFrames} disabled={preset === "turbidity" || preset === "lighting"} testId="capture-frames" />
+        <NumField label={preset === "grid" ? "Per cell" : "Frames"} value={frames} min={1} max={200} onChange={setFrames} disabled={preset === "turbidity" || preset === "lighting"} testId="capture-frames" />
         <NumField label="Every (s)" value={every} min={0.5} max={60} step={0.5} onChange={setEvery} disabled={preset !== "mission"} />
         <NumField label="Seed" value={seed} min={0} max={2 ** 31} onChange={setSeed} />
         <label className="flex flex-col gap-0.5 text-[10px] text-muted">

@@ -35,8 +35,41 @@ import type {
 export const API_ORIGIN = (process.env.NEXT_PUBLIC_GANTRYLAB_API ?? "http://localhost:8000").replace(/\/+$/, "");
 export const API_BASE = `${API_ORIGIN}/api/v1`;
 
+/**
+ * Whether there is a backend to ask. With none configured, a deployed site must not knock on every visitor's localhost
+ * (browsers prompt for it, and it is never there); a page served from localhost still finds the local service.
+ */
+export function backendConfigured(): boolean {
+  if (process.env.NEXT_PUBLIC_GANTRYLAB_API || typeof window === "undefined") return true;
+  return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+}
+
 /** The exact start command from backend/README_GANTRYLAB.md. */
-export const BACKEND_START_COMMAND = "cd backend\n.venv/Scripts/python -m uvicorn gantrylab.app:app --port 8000";
+const WINDOWS = typeof navigator !== "undefined" && /^win/i.test(navigator.platform);
+export const BACKEND_START_COMMAND = `cd backend\n.venv/${WINDOWS ? "Scripts" : "bin"}/python -m uvicorn gantrylab.app:app --port 8000`;
+
+const TOKEN_KEY = "gantrylab.api.token";
+/** Access token for a protected backend, kept in this browser only. */
+export function apiToken(): string {
+  try {
+    return window.localStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+export function setApiToken(token: string): void {
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable: the token cannot be remembered */
+  }
+}
+/** Headers every write carries. */
+export function authHeaders(): Record<string, string> {
+  const t = apiToken();
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
 
 export type ApiErrorKind = "unreachable" | "http" | "invalid_response" | "aborted";
 
@@ -64,6 +97,7 @@ export class ApiError extends Error {
     if (this.kind === "unreachable") return "Backend unreachable";
     if (this.kind === "aborted") return "Request cancelled";
     if (this.kind === "invalid_response") return "Unexpected response";
+    if (this.status === 401) return "Access token needed";
     if (this.status === 404) return "Not found";
     if (this.status === 409) return "Not ready yet";
     if (this.status === 413) return "Too large";
@@ -118,13 +152,15 @@ export interface RequestOptions {
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const init: RequestInit = { method: opts.method ?? "GET", signal: opts.signal, cache: "no-store" };
+  if (init.method !== "GET") init.headers = authHeaders();
   if (opts.body !== undefined) {
     if (opts.body instanceof FormData) init.body = opts.body;
     else {
       init.body = JSON.stringify(opts.body);
-      init.headers = { "content-type": "application/json" };
+      init.headers = { ...init.headers, "content-type": "application/json" };
     }
   }
+  if (!backendConfigured()) throw new ApiError("unreachable", "No evaluation backend is configured for this site.", { path });
   let res: Response;
   try {
     res = await fetch(API_BASE + path, init);
@@ -216,6 +252,7 @@ export function uploadModel(file: File, opts: { name?: string; onProgress?: (p: 
   const path = "/models";
   const promise = new Promise<{ record: ModelRecord; created: boolean }>((resolve, reject) => {
     xhr.open("POST", API_BASE + path);
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v);
     xhr.responseType = "text";
     xhr.upload.onprogress = (e) => {
       const total = e.lengthComputable ? e.total : file.size;

@@ -10,6 +10,7 @@ import { Btn } from "./shared";
 const PRESETS: { id: LabCapturePreset; label: string }[] = [
   { id: "jitter", label: "Current pose, jittered" },
   { id: "raster", label: "Raster over travel (15)" },
+  { id: "grid", label: "Condition grid for the benchmark (72)" },
   { id: "turbidity", label: "Turbidity sweep (5)" },
   { id: "lighting", label: "Lighting sweep (5)" },
 ];

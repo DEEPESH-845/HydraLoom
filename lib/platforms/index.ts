@@ -17,7 +17,7 @@ export interface CameraMount {
   width: number;
   height: number;
   fps: number;
-  /** exposure time, s; motion during it smears the image */
+  /** exposure time, s; motion during it smears the image (the AUV camera is strobe-lit, the ROV runs a short shutter) */
   exposureS: number;
 }
 
@@ -65,7 +65,7 @@ export const PLATFORMS: Record<PlatformId, PlatformDefinition> = {
     summary: "Tethered, fully actuated (6 DOF, 8 thrusters). Holds station in moderate current; forward camera tilted 30 degrees down.",
     domain: "field",
     vehicle: VEHICLES.rov,
-    camera: { position: [0.22, 0.02, 0], tiltDeg: 30, hfovDeg: 80, width: 1280, height: 720, fps: 30, exposureS: 1 / 60 },
+    camera: { position: [0.22, 0.02, 0], tiltDeg: 30, hfovDeg: 80, width: 1280, height: 720, fps: 30, exposureS: 1 / 120 },
     lamps: { count: 4, lumens: 6000, beamDeg: 135, offsets: [[0.2, 0.08, -0.18], [0.2, 0.08, 0.18], [0.2, -0.08, -0.18], [0.2, -0.08, 0.18]] },
     sensors: ["HD camera (1280x720)", "depth sensor", "IMU/AHRS", "DVL (simulated velocity)"],
     compute: "rpi4",
@@ -77,7 +77,7 @@ export const PLATFORMS: Record<PlatformId, PlatformDefinition> = {
     summary: "Torpedo AUV, propeller plus rudder and elevator. Flies survey lines at 1 to 2 m/s; cannot hover. Downward camera.",
     domain: "field",
     vehicle: VEHICLES.auv,
-    camera: { position: [0.3, -0.09, 0], tiltDeg: 90, hfovDeg: 70, width: 1280, height: 960, fps: 10, exposureS: 1 / 250 },
+    camera: { position: [0.3, -0.09, 0], tiltDeg: 90, hfovDeg: 70, width: 1280, height: 960, fps: 10, exposureS: 1 / 1000 },
     lamps: { count: 2, lumens: 10000, beamDeg: 90, offsets: [[0.1, -0.1, -0.08], [0.55, -0.1, 0.08]] },
     sensors: ["downward survey camera", "DVL", "INS", "depth sensor", "altimeter"],
     compute: "rpi5",

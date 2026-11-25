@@ -89,7 +89,8 @@ class SerialBridge:
                 continue
             try:
                 data = json.loads(line)
-            except json.JSONDecodeError:
+                json.dumps(data, allow_nan=False)  # NaN or Infinity would make every telemetry frame invalid JSON
+            except (ValueError, RecursionError):
                 continue  # malformed packet from UART noise
             if not isinstance(data, dict):
                 continue  # a valid JSON value that is not a telemetry object

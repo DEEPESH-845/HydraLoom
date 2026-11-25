@@ -8,6 +8,7 @@ Client-supplied file names are recorded but never used to build paths.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from dataclasses import dataclass, field
@@ -20,6 +21,9 @@ from python_multipart.multipart import MultipartParser, parse_options_header
 
 class UploadRejected(HTTPException):
     pass
+
+
+MAX_TEXT_FIELDS = 64
 
 
 @dataclass
@@ -76,7 +80,7 @@ async def parse_multipart(
     tmp_dir.mkdir(parents=True, exist_ok=True)
     form = ParsedForm()
     state: dict = {"headers": {}, "hf": b"", "hv": b"", "name": None, "file": None, "fh": None,
-                   "buf": None, "hasher": None, "size": 0, "text_file": False}
+                   "buf": None, "hasher": None, "size": 0, "text_file": False, "text_parts": 0, "text_bytes": 0, "ended": False}
     errors: list[HTTPException] = []
 
     def fail(status: int, detail: str) -> None:
@@ -117,6 +121,9 @@ async def parse_multipart(
             state["hasher"] = hashlib.sha256()
             form.files.append(sf)
         else:
+            state["text_parts"] += 1
+            if state["text_parts"] > MAX_TEXT_FIELDS:
+                fail(413, f"too many form fields (max {MAX_TEXT_FIELDS})")
             state["buf"] = bytearray()
             state["text_file"] = b"filename" in dparams
 
@@ -133,7 +140,9 @@ async def parse_multipart(
             if len(sf.head) < 64:
                 sf.head = (sf.head + chunk)[:64]
         else:
-            if state["size"] > max_field_bytes:
+            # Text parts stay in memory, so the cap covers all of them together.
+            state["text_bytes"] += len(chunk)
+            if state["text_bytes"] > max_field_bytes:
                 fail(413, f"form field {state['name']!r} exceeds {max_field_bytes} bytes")
             state["buf"].extend(chunk)
 
@@ -151,6 +160,9 @@ async def parse_multipart(
                 fail(400, f"form field {state['name']!r} is not valid UTF-8")
             form.fields.setdefault(state["name"], []).append(text)
 
+    def on_end() -> None:
+        state["ended"] = True
+
     parser = MultipartParser(
         params[b"boundary"],
         callbacks={
@@ -161,6 +173,7 @@ async def parse_multipart(
             "on_headers_finished": on_headers_finished,
             "on_part_data": on_part_data,
             "on_part_end": on_part_end,
+            "on_end": on_end,
         },
     )
     total = 0
@@ -171,7 +184,9 @@ async def parse_multipart(
                 raise HTTPException(status_code=413, detail=f"request body exceeds {max_total_bytes} bytes")
             parser.write(chunk)
         parser.finalize()
-    except HTTPException:
+        if not state["ended"]:
+            raise ValueError("body ends before the closing boundary")
+    except (HTTPException, asyncio.CancelledError):
         _abort(state, form)
         raise
     except Exception as exc:

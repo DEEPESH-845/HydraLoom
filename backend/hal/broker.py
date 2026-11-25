@@ -9,9 +9,10 @@ MODES = ("SIMULATION", "HARDWARE")
 
 def _pwm(value) -> float:
     """A thruster command: a finite number, clamped to -100..100 percent. Anything else is rejected."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or (
+            isinstance(value, float) and not math.isfinite(value)):  # isfinite() overflows on a huge int
         raise ValueError(f"PWM must be a finite number, got {value!r}")
-    return max(-100.0, min(100.0, float(value)))
+    return float(max(-100, min(100, value)))
 
 
 class HALBroker:

@@ -24,8 +24,8 @@ const pureWaterScattering = (nm: number) => 0.00288 * Math.pow(nm / 500, -4.32);
 const REFLECTANCE_F = 0.33;
 
 /** Kirk 1984/1991: Kd = sqrt(a^2 + G a b) / mu0, with G = 0.425 mu0 - 0.19. */
-const KIRK_MU0 = 0.87;
-const KIRK_G = 0.425 * KIRK_MU0 - 0.19;
+export const KIRK_DEFAULT_MU0 = 0.87;
+const kirkG = (mu0: number) => 0.425 * mu0 - 0.19;
 
 /** Koschmieder contrast threshold: an object is lost when its apparent contrast falls below 2 percent. */
 export const CONTRAST_THRESHOLD = 0.02;
@@ -46,6 +46,8 @@ export interface WaterSpec {
   particleBackscatterRatio: number;
   /** Spectral slope of particle attenuation, c_p(lambda) = c_p(550) (lambda / 550)^-slope. */
   particleSlope: number;
+  /** cosine of the sun's zenith angle in the water; absent = the default daylight geometry, 0.87 */
+  mu0?: number;
   /** CDOM absorption at 440 nm, m^-1. a_g(lambda) = a_g(440) exp(-0.014 (lambda - 440)), Bricaud et al. 1981. */
   cdom440: number;
 }
@@ -72,6 +74,8 @@ export function waterOptics(spec: WaterSpec): WaterOptics {
   const a: number[] = [];
   const b: number[] = [];
   const bb: number[] = [];
+  const mu0 = spec.mu0 ?? KIRK_DEFAULT_MU0;
+  const g = kirkG(mu0);
   for (let i = 0; i < 3; i++) {
     const nm = CHANNEL_NM[i];
     const bw = pureWaterScattering(nm);
@@ -88,7 +92,7 @@ export function waterOptics(spec: WaterSpec): WaterOptics {
     b: map3((i) => b[i]),
     bb: map3((i) => bb[i]),
     c: map3((i) => a[i] + b[i]),
-    kd: map3((i) => Math.sqrt(a[i] * a[i] + KIRK_G * a[i] * b[i]) / KIRK_MU0),
+    kd: map3((i) => Math.sqrt(a[i] * a[i] + g * a[i] * b[i]) / mu0),
     rInf: map3((i) => (REFLECTANCE_F * bb[i]) / (a[i] + bb[i])),
   };
 }

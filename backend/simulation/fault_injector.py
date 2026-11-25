@@ -12,6 +12,7 @@ class FaultInjector:
         self.broker = broker
         self.running = False
         self.active_faults = []
+        self._timers = {}
         # healthy sensor noise, restored when a SENSOR_LOSS fault ends
         self._noise_baseline = (broker.sim_depth.noise_std, broker.sim_imu.noise_std)
 
@@ -27,18 +28,27 @@ class FaultInjector:
             print("[FaultInjector] Triggering SENSOR_LOSS")
             self.broker.sim_depth.noise_std = 15.0 # Massive noise spike
             self.broker.sim_imu.noise_std = 10.0
-            threading.Timer(8.0, self._revert_sensor_loss).start()
+            self._revert_after(8.0, self._revert_sensor_loss)
             
         elif anomaly_type == "LEAK_DETECT":
             print("[FaultInjector] Triggering LEAK_DETECT")
             self.broker.leak_detected = True
-            threading.Timer(10.0, self._revert_leak).start()
+            self._revert_after(10.0, self._revert_leak)
             
         elif anomaly_type == "THRUSTER_OVERLOAD":
             print("[FaultInjector] Triggering THRUSTER_OVERLOAD")
             # Drop efficiency of T1 and T3 to 10%
             self.broker.physics.efficiency = [0.1, 1.0, 0.1, 1.0]
-            threading.Timer(8.0, self._revert_thruster).start()
+            self._revert_after(8.0, self._revert_thruster)
+
+    def _revert_after(self, seconds, revert):
+        """Schedules the end of a fault. Triggering it again restarts the clock instead of ending it early."""
+        old = self._timers.get(revert.__name__)
+        if old:
+            old.cancel()
+        timer = self._timers[revert.__name__] = threading.Timer(seconds, revert)
+        timer.daemon = True  # a pending fault must not delay process exit
+        timer.start()
 
     def _revert_sensor_loss(self):
         print("[FaultInjector] Reverting SENSOR_LOSS")

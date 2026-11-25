@@ -13,6 +13,7 @@ app = FastAPI()
 
 hal_broker = HALBroker()
 fault_injector = FaultInjector(hal_broker)
+mode_lock = asyncio.Lock()
 vision_pipeline = VisionPipeline(mode=hal_broker.mode, physics=hal_broker.physics)
 
 @app.on_event("startup")
@@ -63,16 +64,19 @@ async def command_endpoint(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            data = await websocket.receive_text()
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
             # A malformed command is answered with an ERROR and the channel stays open for the next one.
             try:
-                cmd = json.loads(data)
+                cmd = json.loads(message.get("text") or "")
                 if not isinstance(cmd, dict):
                     raise ValueError("command must be a JSON object")
                 kind = cmd.get("type")
                 if kind == "SET_MODE":
                     new_mode = cmd.get("mode")
-                    result = hal_broker.set_mode(new_mode)
+                    async with mode_lock:  # opening or closing the UART blocks for up to 2 s
+                        result = await asyncio.to_thread(hal_broker.set_mode, new_mode)
                     if result["success"]:
                         vision_pipeline.set_mode(hal_broker.mode)
 
@@ -90,7 +94,7 @@ async def command_endpoint(websocket: WebSocket):
                     hal_broker.send_command(cmd.get("payload"))
                 else:
                     raise ValueError(f"unknown command type {kind!r}")
-            except (ValueError, TypeError) as e:  # json.JSONDecodeError is a ValueError
+            except (ValueError, TypeError, RecursionError) as e:  # json.JSONDecodeError is a ValueError
                 await websocket.send_json({"type": "ERROR", "message": str(e)})
     except WebSocketDisconnect:
         pass

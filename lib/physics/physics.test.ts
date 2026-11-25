@@ -130,7 +130,7 @@ describe("vehicle dynamics", () => {
     // Munk moment of its added mass, as the dynamics model says; pilots always hold attitude)
     const s = createVehicleState([0, -5, 0]);
     const pilot = new RovPilot();
-    const t: PilotTarget = { mode: "MANUAL", stick: { surge: 1, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0 }, route: [], speed: 0.5, depthHold: true };
+    const t: PilotTarget = { mode: "MANUAL", stick: { surge: 1, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0 }, route: [], speed: 0.5, assist: false };
     for (let i = 0; i < 120 * 30; i++) stepVehicle(VEHICLES.rov, s, pilot.update(VEHICLES.rov, s, t, () => -50, DT), { water: SEA, current: [0, 0, 0], surfaceY: 0 }, flat, DT);
     const p = VEHICLES.rov;
     // steady state: F = Dl u + Dq u^2
@@ -157,7 +157,7 @@ describe("vehicle dynamics", () => {
     const run = () => {
       const s = createVehicleState([0, -5, 0]);
       const pilot = new RovPilot();
-      const t: PilotTarget = { mode: "WAYPOINTS", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0 }, route: [{ x: 5, y: -6, z: 2 }], speed: 0.5, depthHold: true };
+      const t: PilotTarget = { mode: "WAYPOINTS", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0 }, route: [{ x: 5, y: -6, z: 2 }], speed: 0.5, assist: true };
       const f = new CurrentField({ ...DEFAULT_CURRENT, speedMps: 0.3, turbulence: 0.2 }, () => -50);
       for (let i = 0; i < 120 * 20; i++) {
         const cmd = pilot.update(VEHICLES.rov, s, t, () => -50, DT);
@@ -173,7 +173,7 @@ describe("autopilots", () => {
   it("ROV holds station within 5 cm in a 0.4 m/s cross current", () => {
     const s = createVehicleState([0, -5, 0]);
     const pilot = new RovPilot();
-    const t: PilotTarget = { mode: "HOLD", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0, headingDeg: 0 }, route: [], speed: 0.5, depthHold: true };
+    const t: PilotTarget = { mode: "HOLD", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0, headingDeg: 0 }, route: [], speed: 0.5, assist: true };
     let err = 0;
     for (let i = 0; i < 120 * 60; i++) {
       const cmd = pilot.update(VEHICLES.rov, s, t, () => -50, DT);
@@ -185,7 +185,7 @@ describe("autopilots", () => {
   it("ROV cannot hold station when the current exceeds its thrust", () => {
     const s = createVehicleState([0, -5, 0]);
     const pilot = new RovPilot();
-    const t: PilotTarget = { mode: "HOLD", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0, headingDeg: 0 }, route: [], speed: 0.5, depthHold: true };
+    const t: PilotTarget = { mode: "HOLD", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -5, z: 0, headingDeg: 0 }, route: [], speed: 0.5, assist: false };
     for (let i = 0; i < 120 * 30; i++) {
       const cmd = pilot.update(VEHICLES.rov, s, t, () => -50, DT);
       stepVehicle(VEHICLES.rov, s, cmd, { water: SEA, current: [1.6, 0, 0], surfaceY: 0 }, flat, DT);
@@ -197,7 +197,7 @@ describe("autopilots", () => {
     s.velocity = [1.5, 0, 0];
     const pilot = new AuvPilot();
     const route = lawnmower({ x0: 0, z0: 0, x1: 80, z1: 30 }, 15, 0, -20);
-    const t: PilotTarget = { mode: "WAYPOINTS", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -20, z: 0 }, route, speed: 1.5, depthHold: true };
+    const t: PilotTarget = { mode: "WAYPOINTS", stick: { surge: 0, sway: 0, heave: 0, yaw: 0 }, hold: { x: 0, y: -20, z: 0 }, route, speed: 1.5, assist: true };
     let i = 0;
     let maxDepthErr = 0;
     for (; i < 120 * 600 && !pilot.status.done; i++) {

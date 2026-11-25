@@ -57,7 +57,7 @@ function buildFlow(env: EnvironmentDefinition, baseY: number) {
   const mesh = hud(new THREE.InstancedMesh(arrowGeometry(), mat, pts.length), "hud-flow-arrows");
   mesh.renderOrder = 3;
   for (let i = 0; i < pts.length; i++) mesh.setColorAt(i, SLOW);
-  const st = { acc: 1 };
+  const st = { acc: 1, size: 1 };
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const sc = new THREE.Vector3();
@@ -65,8 +65,14 @@ function buildFlow(env: EnvironmentDefinition, baseY: number) {
   const dir = new THREE.Vector3();
   const X = new THREE.Vector3(1, 0, 0);
   const c = new THREE.Color();
-  const update = (show: boolean, dt: number) => {
+  const update = (show: boolean, close: boolean, dt: number) => {
     mesh.visible = show;
+    // sized for the whole site from above; beside the platform the same arrows would fill the picture
+    const size = close ? 0.14 : 1;
+    if (size !== st.size) {
+      st.size = size;
+      st.acc = 1;
+    }
     if (!show) return;
     st.acc += dt;
     if (st.acc < 0.25) return;
@@ -84,10 +90,10 @@ function buildFlow(env: EnvironmentDefinition, baseY: number) {
       md[1] += v[1];
       md[2] += v[2];
       const k = Math.min(1.3, sp / ref);
-      const L = Math.max(0.0001, Math.min(cell * 0.7, 6) * k);
+      const L = Math.max(0.0001, Math.min(cell * 0.7, 6) * k * size);
       if (sp > 1e-5) q.setFromUnitVectors(X, dir.set(v[0], v[1], v[2]).normalize());
       p.set(pt[0], pt[1] - baseY, pt[2]);
-      const th = Math.min(cell * 0.12, 0.8);
+      const th = Math.min(cell * 0.12, 0.8) * size;
       m.compose(p, q, sc.set(L, th, th));
       mesh.setMatrixAt(i, m);
       mesh.setColorAt(i, c.lerpColors(SLOW, FAST, Math.min(1, k)));
@@ -114,7 +120,8 @@ export function FlowField({ env, baseY }: { env: EnvironmentDefinition; baseY: n
   const show = useFieldStore((s) => s.showFlow);
   const flow = useMemo(() => buildFlow(env, baseY), [env, baseY]);
   useDeferredDispose(flow, flow.dispose);
-  useFrame((_, dt) => flow.update(show, dt));
+  const close = useFieldStore((s) => s.view === "follow");
+  useFrame((_, dt) => flow.update(show, close, dt));
   return <primitive object={flow.mesh} />;
 }
 

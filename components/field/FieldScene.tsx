@@ -5,6 +5,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import type { FieldEngine } from "@/lib/field/engine";
 import { useFieldStore, type ViewMode } from "@/lib/field/store";
 import { ENVIRONMENT_LIBRARY } from "@/lib/world/environments";
 import { terrainHeight } from "@/lib/world/terrain";
@@ -47,12 +48,32 @@ export const viewState = {
 
 /* ---------- driver ---------- */
 
+/**
+ * Frame time as the display shows it. The raw frame time is read when the callback happens to run, which jitters by
+ * milliseconds against the display and reads as judder; a smoothed one advances evenly, and a small correction keeps it
+ * locked to the wall clock so the simulation never drifts.
+ */
+export const pace = { step: 1 / 60, lag: 0, smooth: 1 / 60 };
+function advancePace(dt: number): number {
+  // a stall (tab switch, shader compile) is passed on as it is and forgets the history
+  if (dt > 0.1) {
+    pace.smooth = 1 / 60;
+    pace.lag = 0;
+    return (pace.step = dt);
+  }
+  pace.smooth += (dt - pace.smooth) * 0.08;
+  pace.lag += dt;
+  pace.step = Math.max(0, pace.smooth + (pace.lag - pace.smooth) * 0.06);
+  pace.lag -= pace.step;
+  return pace.step;
+}
+
 function FieldDriver() {
   const acc = useRef(0);
   const fpsAcc = useRef({ t: 0, n: 0 });
   useFrame((_, dt) => {
     const s = useFieldStore.getState();
-    s.engine.tick(dt);
+    s.engine.tick(advancePace(dt));
     acc.current += dt;
     if (acc.current >= 1 / 15) {
       acc.current = 0;
@@ -260,6 +281,8 @@ function Lights() {
 /* ---------- camera rig ---------- */
 
 const MAIN_FOV = 45;
+/** How far behind the platform the chase camera flies, m. */
+const chaseBack = (e: FieldEngine) => (e.vehicle ? (e.platform.id === "auv" ? 4.5 : 2.6) : 3.2);
 /** Part of the canvas no panel covers: the follow view keeps the platform in it. */
 let free: FreeRect | null = null;
 /** Box centred on the window the overview and free views frame the site in. */
@@ -336,6 +359,8 @@ function createRig(reduced: boolean) {
   };
   const desired = new THREE.Vector3();
   const look = new THREE.Vector3();
+  // the chase camera's own eased heading and aim: the hull may pitch, sway and bob, the picture does not
+  const chase = { yaw: 0, look: new THREE.Vector3(), ready: false };
   // view offset actually applied, eased toward the free rect so panels showing or hiding never jolt the picture
   const offset = { x: 0, y: 0, ready: false };
   // keyboard glide: held keys and the eased pivot velocity, m/s along [right, forward, up] of the camera heading
@@ -448,6 +473,7 @@ function createRig(reduced: boolean) {
         c.dampingFactor = 1 - Math.pow(1 - 0.14, Math.min(4, dt * 60));
       }
       if (!orbiting) glide.vel.set(0, 0, 0);
+      if (v !== "follow") chase.ready = false;
       if (v === "pilot") {
         // through the platform camera itself: same pose and vertical field of view, canvas aspect
         const pose = engine.cameraPose(true);
@@ -472,17 +498,37 @@ function createRig(reduced: boolean) {
         // chase camera behind and above the platform, smoothed independently of the frame rate
         const pose = engine.renderPose();
         const fwd = engine.cameraPose(true).forward;
-        const h = Math.hypot(fwd[0], fwd[2]) || 1;
         const p = pose.position;
-        const back = engine.vehicle ? (engine.platform.id === "auv" ? 4.5 : 2.6) : 3.2;
-        desired.set(p[0] - (fwd[0] / h) * back, p[1] + back * 0.55 + (engine.vehicle ? 0 : 1.2), p[2] - (fwd[2] / h) * back);
-        look.set(p[0] + (fwd[0] / h) * 1.2, p[1] + (engine.vehicle ? 0 : 1.0), p[2] + (fwd[2] / h) * 1.2);
-        const k = reduced ? 1 : 1 - Math.exp(-dt * 5);
-        if (camera.position.distanceTo(desired) > 30) camera.position.copy(desired);
-        else camera.position.lerp(desired, k);
-        camera.lookAt(look);
-        viewState.focus.copy(look);
-        viewState.distance = camera.position.distanceTo(look);
+        // a downward camera has no horizontal forward: use the hull's
+        const hf = Math.hypot(fwd[0], fwd[2]) > 0.2 ? fwd : engine.forward();
+        const yaw = Math.atan2(hf[2], hf[0]);
+        const back = chaseBack(engine);
+        // entering the view, or a new site or reset, starts in place instead of flying across the world
+        const jump = !chase.ready || chase.look.distanceTo(look.set(p[0], p[1], p[2])) > 12;
+        const step = Math.min(dt, 0.1);
+        chase.yaw = jump || reduced ? yaw : chase.yaw + Math.atan2(Math.sin(yaw - chase.yaw), Math.cos(yaw - chase.yaw)) * (1 - Math.exp(-step * 2.6));
+        const cx = Math.cos(chase.yaw);
+        const cz = Math.sin(chase.yaw);
+        look.set(p[0] + cx * 1.2, p[1] + (engine.vehicle ? 0 : 1.0), p[2] + cz * 1.2);
+        if (jump || reduced) chase.look.copy(look);
+        else {
+          // tight along the ground so the platform stays framed, soft vertically so bobbing does not shake the picture
+          const kh = 1 - Math.exp(-step * 9);
+          chase.look.x += (look.x - chase.look.x) * kh;
+          chase.look.z += (look.z - chase.look.z) * kh;
+          chase.look.y += (look.y - chase.look.y) * (1 - Math.exp(-step * 3));
+        }
+        chase.ready = true;
+        desired.set(chase.look.x - cx * (back + 1.2), chase.look.y + back * 0.55 + (engine.vehicle ? 0 : 0.2), chase.look.z - cz * (back + 1.2));
+        // inside the site, above the bed and what stands on it, below the surface
+        const [ex, ez] = engine.env.geometry.extentM;
+        desired.x = Math.max(-ex / 2 + 0.3, Math.min(ex / 2 - 0.3, desired.x));
+        desired.z = Math.max(-ez / 2 + 0.3, Math.min(ez / 2 - 0.3, desired.z));
+        desired.y = Math.min(-0.15, Math.max(desired.y, engine.floor(desired.x, desired.z) + BED_CLEARANCE));
+        camera.position.copy(desired);
+        camera.lookAt(chase.look);
+        viewState.focus.copy(chase.look);
+        viewState.distance = camera.position.distanceTo(chase.look);
       } else if (c) {
         if (v === "overview" && fitKey && layoutKey(width, height) !== fitKey) rig.fitOverview(camera, width, height, false);
         // keyboard glide: pivot and camera translate together, at a speed scaled to the view distance
@@ -532,7 +578,13 @@ function createRig(reduced: boolean) {
       const r = orbiting ? centred : free;
       if (r && width > 0) {
         const ox = width / 2 - (r.x0 + r.x1) / 2;
-        const oy = height / 2 - (r.y0 + r.y1) / 2;
+        let oy = height / 2 - (r.y0 + r.y1) / 2;
+        // the chase camera aims ahead of the vehicle, which is then drawn lower: in a short free area (a card is open)
+        // the vehicle itself goes in the middle. Fixed geometry, so it does not follow every bob.
+        if (v === "follow" && engine.vehicle && r.y1 - r.y0 < height * 0.6) {
+          const b = chaseBack(engine);
+          oy += (Math.tan(Math.atan(0.55) - Math.atan((b * 0.55) / (b + 1.2))) / Math.tan((MAIN_FOV * Math.PI) / 360)) * (height / 2);
+        }
         const ko = !offset.ready || reduced ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) * 7);
         offset.x += (ox - offset.x) * ko;
         offset.y += (oy - offset.y) * ko;
@@ -621,7 +673,7 @@ function CameraRig() {
     return () => el.removeEventListener("dblclick", onDbl);
   }, [rig, gl, camera, scene]);
 
-  useFrame((state, dt) => rig.frame(state.camera as THREE.PerspectiveCamera, state.size.width, state.size.height, dt), -0.5);
+  useFrame((state) => rig.frame(state.camera as THREE.PerspectiveCamera, state.size.width, state.size.height, pace.step), -0.5);
 
   return <OrbitControls ref={controls} makeDefault enableDamping minDistance={0.6} maxDistance={900} zoomSpeed={1.1} rotateSpeed={0.75} panSpeed={1} />;
 }
@@ -688,8 +740,9 @@ function Passes() {
     const engine = s.engine;
     const pr = gl.getPixelRatio();
     const canvas = gl.domElement;
-    const fullW = canvas.clientWidth * pr;
-    const fullH = canvas.clientHeight * pr;
+    // three's setViewport and setScissor take CSS pixels and apply the pixel ratio themselves
+    const fullW = canvas.clientWidth;
+    const fullH = canvas.clientHeight;
     const time = waterTime(state.clock.elapsedTime);
     patchSceneWater(scene, HUD_LAYER);
     scene.fog = null;
@@ -729,7 +782,7 @@ function Passes() {
     gl.shadowMap.needsUpdate = shadowDue(engine.env.id, state.clock.elapsedTime);
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);
-    waterUniforms.uWaterViewportH.value = fullH;
+    waterUniforms.uWaterViewportH.value = fullH * pr;
     // headlight aid: outside the pilot view the lamps compete with the overview's daylight or fill, so they are drawn
     // brighter there (labelled in the UI); the platform camera below sees their true power
     const aid = pilot ? 1 : lampEnv ? HEADLIGHT_AID.lamp : HEADLIGHT_AID.daylight;
@@ -767,17 +820,17 @@ function Passes() {
     const r = f.rect;
     if (r.width < 4 || r.height < 4 || !s.worldReady) return;
     const cr = canvas.getBoundingClientRect();
-    const x = Math.round((r.left - cr.left) * pr);
-    const y = Math.round((cr.bottom - r.bottom) * pr);
-    const w = Math.round(r.width * pr);
-    const h = Math.round(r.height * pr);
+    const x = r.left - cr.left;
+    const y = cr.bottom - r.bottom;
+    const w = r.width;
+    const h = r.height;
     if (x + w <= 0 || y + h <= 0 || x >= fullW || y >= fullH) return;
     // the platform camera always sees true water and only the platform's own light
     const fp = applyPass(engine, { feed: true, viewScale: 1, fill: false, depthRefY: bedAhead, cameraPos: pose.position, viewDistance: feedDist, time });
     gl.setViewport(x, y, w, h);
     gl.setScissor(x, y, w, h);
     gl.setScissorTest(true);
-    waterUniforms.uWaterViewportH.value = h;
+    waterUniforms.uWaterViewportH.value = h * pr;
     const prevBg = scene.background;
     scene.background = fp.background;
     gl.autoClear = false;

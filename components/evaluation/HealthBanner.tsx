@@ -2,7 +2,8 @@
 
 import clsx from "clsx";
 import type { HealthResponse } from "@/lib/api/types";
-import { API_ORIGIN, urls } from "@/lib/api/client";
+import { useState, useSyncExternalStore } from "react";
+import { API_ORIGIN, apiToken, setApiToken, urls } from "@/lib/api/client";
 
 function Flag({ name, on, title }: { name: string; on: boolean; title?: string }) {
   return (
@@ -41,8 +42,38 @@ export function HealthBanner({ health }: { health: HealthResponse }) {
           <Flag key={k} name={k} on={v} title={v ? `${k} configured` : `${k} not configured`} />
         ))}
       </Group>
+      {health.write_auth && <TokenField />}
       {!health.data_dir_writable && <span className="label text-danger">Data directory is not writable</span>}
     </div>
+  );
+}
+
+const never = () => () => {};
+
+/** The backend accepts writes only with its access token. Stored in this browser, sent only to the backend. */
+function TokenField() {
+  const saved = useSyncExternalStore(never, () => apiToken() !== "", () => false);
+  const [has, setHas] = useState<boolean | null>(null);
+  const [v, setV] = useState("");
+  const ok = has ?? saved;
+  return (
+    <form
+      className="flex items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setApiToken(v.trim());
+        setHas(v.trim() !== "");
+        setV("");
+      }}
+    >
+      <label className="label text-[9px] text-dim" htmlFor="api-token">
+        Access token
+      </label>
+      <input id="api-token" type="password" autoComplete="off" value={v} onChange={(e) => setV(e.target.value)} placeholder={ok ? "saved" : "needed to upload and run"} className="value w-44 border border-line-strong bg-ground px-2 py-1 text-[11px] text-text placeholder:text-dim" />
+      <button type="submit" className="btn !px-2 !py-1">
+        {ok && !v ? "Clear" : "Save"}
+      </button>
+    </form>
   );
 }
 

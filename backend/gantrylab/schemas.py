@@ -8,12 +8,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-FRAME_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-CLASS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _./-]{0,63}$")
+FRAME_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+CLASS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _./-]{0,63}\Z")
 
 
 class Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # NaN and Infinity parse as Python JSON but no response can carry them.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class Open(BaseModel):
@@ -154,12 +155,14 @@ class Frame(Strict):
         if len(v) > 64:
             raise ValueError("at most 64 condition keys")
         for k, val in v.items():
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$", k):
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,63}\Z", k):
                 raise ValueError(f"invalid condition key {k!r}")
-            if isinstance(val, float) and not math.isfinite(val):
-                raise ValueError(f"condition {k} must be finite")
+            if isinstance(val, int) and abs(val) > 2**63:
+                raise ValueError(f"condition {k} integer too large")
             if isinstance(val, str) and len(val) > 128:
                 raise ValueError(f"condition {k} string too long")
+            if isinstance(val, str):
+                val.encode()  # a lone surrogate raises UnicodeEncodeError, which is a ValueError
         return v
 
     @model_validator(mode="after")
@@ -427,6 +430,16 @@ class ConfidenceHistogram(BaseModel):
     iou_threshold: float
 
 
+class ConditionCell(BaseModel):
+    turbidity: str
+    lighting: str
+    n_frames: int
+    n_gt: int
+    tp: int
+    fp: int
+    fn: int
+
+
 class SliceMetrics(BaseModel):
     id: str
     key: str
@@ -558,6 +571,7 @@ class RunMetrics(BaseModel):
     tp_below_conf_threshold: int
     failure_cap: int
     slices: list[SliceMetrics]
+    condition_cells: list[ConditionCell] = []
     slice_ranking: SliceRanking
     sensitivity: list[Sensitivity]
     latency: LatencyBlock
@@ -612,6 +626,7 @@ class HealthResponse(BaseModel):
     llm_providers: dict[str, bool]
     llm_default: str
     data_dir_writable: bool
+    write_auth: bool = False
     limits: dict[str, Any]
 
 

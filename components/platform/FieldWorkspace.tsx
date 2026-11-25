@@ -13,7 +13,7 @@ import { FieldScene } from "@/components/field/FieldScene";
 import { lastCapture } from "./AnalysisCard";
 import { AnalysisCard } from "./AnalysisCard";
 import { EnvironmentCard } from "./EnvironmentCard";
-import { FieldFeed } from "./FieldFeed";
+import { DetectionBoxes, DetectionStrip, FieldFeed } from "./FieldFeed";
 import { PlatformCard } from "./PlatformCard";
 import { SimulationCard, VIEWS, drive } from "./SimulationCard";
 import { Row, SimTag, deg, f1, f2 } from "./ui";
@@ -34,6 +34,9 @@ const NAV: NavItem[] = [
   { n: "04", label: "Model Lab", href: "/models", title: "Upload and evaluate detection models (opens /models)" },
   { n: "05", label: "Analysis", ws: "analysis", title: "Live analysis, results and dataset capture" },
   { n: "06", label: "Reports", href: "/reports", title: "Engineering reports (opens /reports)" },
+  { n: "07", label: "Benchmark", href: "/benchmark", title: "Compare several models (opens /benchmark)" },
+  { n: "08", label: "Autonomy", href: "/autonomy", title: "Learned navigation and model switching (opens /autonomy)" },
+  { n: "09", label: "Hardware", href: "/hardware", title: "The physical gantry (opens /hardware)" },
 ];
 
 const CARDS: Record<WorkspaceId, () => React.JSX.Element> = {
@@ -59,17 +62,22 @@ const KEYS: Record<string, [keyof import("@/lib/physics/autopilot").Stick, numbe
 /** Keyboard pilot: W/S surge, A/D yaw, Q/E sway, R/F heave, Space pause. Only when no text field has focus. */
 function useKeyboardPilot() {
   useEffect(() => {
-    const held = new Set<string>();
+    // letter pressed on each physical key: Option or a layout switch changes the letter before the key comes up
+    const held = new Map<string, string>();
     const apply = () => {
       const stick = { surge: 0, sway: 0, heave: 0, yaw: 0 };
-      for (const k of held) {
-        const m = KEYS[k];
-        if (m) stick[m[0]] += m[1];
-      }
+      for (const k of held.values()) stick[KEYS[k][0]] += KEYS[k][1];
       drive(stick);
     };
+    const release = () => {
+      if (!held.size) return;
+      held.clear();
+      apply();
+    };
     const down = (e: KeyboardEvent) => {
-      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      // macOS sends no keyup for keys let go while Cmd is down
+      if (e.metaKey || e.ctrlKey || e.altKey) return release();
+      if (isTyping(e.target)) return;
       const k = e.key.toLowerCase();
       if (k === " " && !(e.target instanceof HTMLButtonElement)) {
         const s = useFieldStore.getState();
@@ -79,27 +87,23 @@ function useKeyboardPilot() {
       }
       if (!KEYS[k]) return;
       e.preventDefault();
-      if (held.has(k)) return;
-      held.add(k);
+      if (held.has(e.code)) return;
+      held.set(e.code, k);
       apply();
     };
     const up = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (!held.delete(k)) return;
-      apply();
-    };
-    const blur = () => {
-      if (!held.size) return;
-      held.clear();
-      apply();
+      if (held.delete(e.code)) apply();
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
+    window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", release);
     return () => {
+      release();
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
+      window.removeEventListener("blur", release);
+      document.removeEventListener("visibilitychange", release);
     };
   }, []);
 }
@@ -125,6 +129,7 @@ function useExploreKeys() {
 export function FieldWorkspace() {
   const workspace = useFieldStore((s) => s.workspace);
   const exploring = useFieldStore((s) => s.exploring);
+  const view = useFieldStore((s) => s.view);
   useKeyboardPilot();
   useExploreKeys();
   useEffect(() => {
@@ -144,9 +149,11 @@ export function FieldWorkspace() {
           <FieldScene />
         </div>
         <div className="pointer-events-none absolute inset-0 select-none overflow-hidden max-[999px]:flex max-[999px]:flex-col">
+          {view === "pilot" && <DetectionBoxes full />}
           <Veil />
           <TopBar />
           <SiteTag />
+          <DetectionStrip />
           {/* right column: platform camera and key telemetry */}
           <div
             data-field="column"
@@ -205,12 +212,12 @@ function NavItems({ compact }: { compact?: boolean }) {
         );
         const inner = (
           <>
-            <span className={clsx("value text-[10px]", on ? "text-teal" : "text-dim")}>{it.n}</span>
-            <span className={clsx("label", on ? "text-teal" : "text-muted group-hover:text-text", compact && "max-[759px]:hidden", !compact && "max-[1279px]:hidden")}>{it.label}</span>
+            <span className={clsx("value text-[10px]", on ? "text-teal" : "text-dim", !compact && "min-[1400px]:max-[1699px]:hidden")}>{it.n}</span>
+            <span className={clsx("label", on ? "text-teal" : "text-muted group-hover:text-text", compact && "max-[759px]:hidden", !compact && "max-[1399px]:hidden min-[1400px]:max-[1699px]:!tracking-[0.06em]")}>{it.label}</span>
           </>
         );
         return it.href ? (
-          <Link key={it.n} href={it.href} className={cls} title={it.title} aria-label={`${it.n} ${it.label}`}>
+          <Link key={it.n} href={it.href} prefetch={false} className={cls} title={it.title} aria-label={`${it.n} ${it.label}`}>
             {inner}
           </Link>
         ) : (

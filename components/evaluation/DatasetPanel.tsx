@@ -27,7 +27,7 @@ export function DatasetPicker({
     return (
       <EmptyState title="No datasets captured yet" icon={<span className="h-2 w-2 rounded-full bg-amber" aria-hidden />}>
         Datasets are captured from the 3D digital twin, not uploaded by hand. Open the{" "}
-        <Link href="/lab" className="text-text underline decoration-line-strong underline-offset-2 hover:decoration-teal">
+        <Link href="/lab" prefetch={false} className="text-text underline decoration-line-strong underline-offset-2 hover:decoration-teal">
           Gantry Lab
         </Link>{" "}
         or the field{" "}

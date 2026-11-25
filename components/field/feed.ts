@@ -7,7 +7,7 @@ import type { FieldEngine } from "@/lib/field/engine";
 import type { Vec3 } from "@/lib/physics/math";
 import { qRotate } from "@/lib/physics/math";
 import type { WaterOptics } from "@/lib/optics/water";
-import { ntuAt } from "@/lib/world/environments";
+import { ENVIRONMENT_LIBRARY, ntuAt } from "@/lib/world/environments";
 import { terrainHeight } from "@/lib/world/terrain";
 import { setWater, waterUniforms } from "@/components/lab/water";
 import { WHITE_AT_FULL_LIGHT, WORLD_LAYER } from "./common";
@@ -169,7 +169,8 @@ export function applyPass(
   const spec = { ...env.water.optics, ntu: ntuAt(env, c.turbidity) };
   // pathOptics already folded the stratified layer in; express it back as an equivalent NTU for setWater
   const ntuEq = spec.ntu + (optics.c[1] - pathOptics(env, c.turbidity, [0, 0, 0], [0, 0, 0]).c[1]) / Math.max(1e-6, env.water.optics.cPerNtu);
-  const daylight = WHITE_AT_FULL_LIGHT * (0.08 + 0.92 * c.lighting);
+  const sun = env.light.sunFactor ?? 1;
+  const daylight = WHITE_AT_FULL_LIGHT * (0.08 + 0.92 * c.lighting * sun);
   const lampWhite = WHITE_AT_FULL_LIGHT * c.lighting;
   const lampMode = lampEnv && !opts.fill;
   // in fill mode the deep is lit from a notional surface a few metres above the site, so the overview reads
@@ -193,6 +194,7 @@ export function applyPass(
   const shallow = !lampEnv ? Math.max(0, -site.maxY) : Infinity;
   seabedUniforms.uFieldCaustic.value = env.id === "reef" || shallow < 4 ? 0.5 * daylight * Math.exp(-optics.b[1] * Math.max(0, -opts.depthRefY)) : 0;
   seabedUniforms.uFieldTime.value = opts.time;
+  seabedUniforms.uSeabedGain.value = env.seabed.reflectance / ENVIRONMENT_LIBRARY[env.id].seabed.reflectance;
 
   // exposure: for the seabed in view, as a camera on auto-exposure would
   let exposure: number;
@@ -244,8 +246,8 @@ export function applyPass(
 
   // lights
   const L = fieldLights;
-  const k = 0.08 + 0.92 * c.lighting;
-  L.sun.intensity = lampEnv ? 0 : 0.25 + 1.75 * c.lighting;
+  const k = 0.08 + 0.92 * c.lighting * sun;
+  L.sun.intensity = lampEnv ? 0 : 0.25 * Math.min(1, sun) + 1.75 * c.lighting * sun;
   L.hemi.intensity = lampEnv ? 0 : 0.9 * k;
   L.fill.intensity = lampEnv && opts.fill ? 2.2 : 0;
 
