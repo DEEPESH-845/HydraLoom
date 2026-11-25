@@ -160,6 +160,7 @@ The reward is computed and logged for the demo; nothing is updated from it.
 Episode ends after 40 steps or after 3 consecutive HOLD on target.
 Policy confidence is a softmax over action scores and is shown in the UI.
 The UI says exactly this: greedy on axis error, reward logged, not learned from. A trained policy would consume the same observation.
+This is the tracking step only; the scan viewpoints can come from a trained policy (the `learned` strategy, `docs/AUTONOMY.md` section 2).
 
 ### 4.4 Test runner
 
