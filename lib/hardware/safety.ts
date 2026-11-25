@@ -45,6 +45,7 @@ export interface SafetyLimits {
   heartbeatTimeoutMs: number;
 }
 
+/** The blueprint machine: an upper bound. A connected controller narrows it to what it declares (lib/hardware/grbl.ts). */
 export const DEFAULT_LIMITS: SafetyLimits = {
   min: [0.5, 0.5],
   max: [GANTRY.travelX - 0.5, GANTRY.travelY - 0.5],
@@ -138,8 +139,9 @@ export class SafetySupervisor {
     if (cmd.x < min[0] || cmd.x > max[0] || cmd.y < min[1] || cmd.y > max[1])
       return no(`target (${cmd.x.toFixed(1)}, ${cmd.y.toFixed(1)}) outside soft limits X ${min[0]}..${max[0]}, Y ${min[1]}..${max[1]}`);
     if (!(cmd.speed > 0) || cmd.speed > this.limits.maxSpeed) return no(`speed ${cmd.speed} outside 0..${this.limits.maxSpeed} cm/s`);
-    if (s.limitX0 && cmd.x < s.x) return no("X0 limit switch triggered: motion toward it refused");
-    if (s.limitY0 && cmd.y < s.y) return no("Y0 limit switch triggered: motion toward it refused");
+    // written so that an unknown (NaN) position refuses too
+    if (s.limitX0 && !(cmd.x >= s.x)) return no("X0 limit switch triggered: motion toward it refused");
+    if (s.limitY0 && !(cmd.y >= s.y)) return no("Y0 limit switch triggered: motion toward it refused");
     return ok;
   }
 }
