@@ -19,6 +19,8 @@ export interface HealthResponse {
   llm_providers: Record<string, boolean>;
   llm_default: string;
   data_dir_writable: boolean;
+  /** uploads, runs and reports need an access token; absent from older backends */
+  write_auth?: boolean;
   limits: {
     max_model_mb?: number;
     max_dataset_frames?: number;
@@ -426,6 +428,17 @@ export interface SliceMetrics {
   low_support: boolean;
 }
 
+/** Joint turbidity x lighting cell; absent from runs made before the backend reported it. */
+export interface ConditionCell {
+  turbidity: string;
+  lighting: string;
+  n_frames: number;
+  n_gt: number;
+  tp: number;
+  fp: number;
+  fn: number;
+}
+
 export interface RankedSlice {
   id: string;
   key: string;
@@ -536,6 +549,7 @@ export interface RunMetrics {
   tp_below_conf_threshold: number;
   failure_cap: number;
   slices: SliceMetrics[];
+  condition_cells?: ConditionCell[];
   slice_ranking: SliceRanking;
   sensitivity: Sensitivity[];
   latency: LatencyBlock;
