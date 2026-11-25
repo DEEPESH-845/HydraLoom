@@ -143,9 +143,9 @@ class SafetySupervisor:
             return Verdict(False, f"target ({cmd.x:.1f}, {cmd.y:.1f}) outside soft limits X {x0}..{x1}, Y {y0}..{y1}")
         if not (0 < cmd.speed <= self.limits.max_speed):
             return Verdict(False, f"speed {cmd.speed} outside 0..{self.limits.max_speed} cm/s")
-        if s.limit_x0 and cmd.x < s.x:
+        if s.limit_x0 and not cmd.x >= s.x:  # refuses when the position is NaN too
             return Verdict(False, "X0 limit switch triggered: motion toward it refused")
-        if s.limit_y0 and cmd.y < s.y:
+        if s.limit_y0 and not cmd.y >= s.y:
             return Verdict(False, "Y0 limit switch triggered: motion toward it refused")
         return Verdict(True)
 
