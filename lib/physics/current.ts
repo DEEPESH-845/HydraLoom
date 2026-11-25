@@ -55,6 +55,8 @@ export interface CurrentConfig {
   /** height above the seabed at which speedMps applies, m */
   referenceHeightM: number;
   channel?: ChannelProfile;
+  /** surface waves (linear theory) over water of depth depthM; k is the wavenumber for that depth, 1/m */
+  waves?: { heightM: number; periodS: number; headingDeg: number; depthM: number; k: number };
   obstacles: CylinderObstacle[];
   seed: number;
 }
@@ -253,6 +255,27 @@ export class CurrentField {
         vy += m.a[1] * cs;
         vz += m.a[2] * cs;
       }
+    }
+    // waves: orbital velocity of linear theory, back and forth along their heading, decaying with depth
+    const wv = c.waves;
+    if (wv && wv.heightM > 0) {
+      const { k } = wv;
+      const depth = Math.max(0.2, -bedY);
+      const z = Math.min(0, p[1]);
+      const kh = k * depth;
+      const amp = (Math.PI * wv.heightM) / wv.periodS;
+      // cosh(k (z + h)) / sinh(k h), written so deep water does not overflow
+      const e1 = Math.exp(k * z);
+      const e2 = Math.exp(-k * (z + 2 * depth));
+      const den = 1 - Math.exp(-2 * kh);
+      const wh = (wv.headingDeg * Math.PI) / 180;
+      const wx = Math.sin(wh);
+      const wz = -Math.cos(wh);
+      const ph = k * (p[0] * wx + p[2] * wz) - (2 * Math.PI * t) / wv.periodS;
+      const u = (amp * (e1 + e2) * Math.cos(ph)) / den;
+      vx += u * wx;
+      vz += u * wz;
+      vy += (amp * (e1 - e2) * Math.sin(ph)) / den;
     }
     return [vx, vy, vz];
   }

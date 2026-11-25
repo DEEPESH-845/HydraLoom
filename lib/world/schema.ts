@@ -89,6 +89,8 @@ export interface EnvironmentDefinition {
   };
   light: {
     source: "surface" | "lamp";
+    /** daylight entering the water against the default sun; absent = 1 (site parameters set it) */
+    sunFactor?: number;
     /** what the 0..1 lighting control means */
     label: string;
   };
