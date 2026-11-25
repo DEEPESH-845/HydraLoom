@@ -196,7 +196,7 @@ export class SimEngine {
     this.mode = "TEST";
     this.phase = "SCANNING";
     this.log("PHASE", `TEST START seed ${this.scenario.seed}`);
-    this.planner = createPlanner(this.scenario.strategy, this.scenario.waypoints);
+    this.planner = createPlanner(this.scenario.strategy, this.scenario.waypoints, this.scenario);
     this.viewpoints = 0;
     this.pathCm = 0;
     this.revisitFrom.clear();
@@ -208,8 +208,10 @@ export class SimEngine {
     this.phase = "IDLE";
     this.rl.active = false;
     this.trackTargetId = null;
-    this.gantry.x.target = this.gantry.x.pos;
-    this.gantry.y.target = this.gantry.y.pos;
+    // brake to rest along the way it is going: a target at the present position would be overshot and driven back to
+    const { x, y } = this.gantry;
+    const rest = (v: number) => (Math.sign(v) * v * v) / (2 * GANTRY.accel);
+    setGantryTarget(this.gantry, x.pos + rest(x.vel), y.pos + rest(y.vel));
     this.syncIdleRL();
   }
 
