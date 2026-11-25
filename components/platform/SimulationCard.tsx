@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import { HelpCircle, Pause, Play, RotateCcw, Square } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MISSIONS, type MissionId } from "@/lib/missions";
 import type { PilotMode, Stick } from "@/lib/physics/autopilot";
@@ -100,7 +100,20 @@ export function SimulationCard() {
 
 function PilotControls({ mode }: { mode: PilotMode }) {
   const st = useFieldStore.getState();
+  const auv = useFieldStore((s) => s.platformId === "auv");
   const [help, setHelp] = useState(false);
+  const pressed = useRef<Partial<Stick> | null>(null);
+  const release = () => {
+    if (pressed.current) drive(Object.fromEntries(Object.keys(pressed.current).map((k) => [k, 0])));
+    pressed.current = null;
+  };
+  const press = (stick: Partial<Stick>) => {
+    release();
+    pressed.current = stick;
+    drive(stick);
+  };
+  // the card can close under a held button
+  useEffect(() => release, []);
   const pad = (label: string, stick: Partial<Stick>, aria: string) => (
     <button
       type="button"
@@ -108,18 +121,20 @@ function PilotControls({ mode }: { mode: PilotMode }) {
       className="btn h-9 w-12 select-none px-0 py-0 text-[11px] touch-none"
       onPointerDown={(e) => {
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
-        drive(stick);
+        press(stick);
       }}
-      onPointerUp={() => drive(Object.fromEntries(Object.keys(stick).map((k) => [k, 0])))}
-      onPointerCancel={() => drive(Object.fromEntries(Object.keys(stick).map((k) => [k, 0])))}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onLostPointerCapture={release}
+      onBlur={release}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          drive(stick);
+          if (!e.repeat) press(stick);
         }
       }}
       onKeyUp={(e) => {
-        if (e.key === "Enter" || e.key === " ") drive(Object.fromEntries(Object.keys(stick).map((k) => [k, 0])));
+        if (e.key === "Enter" || e.key === " ") release();
       }}
     >
       {label}
@@ -161,6 +176,7 @@ function PilotControls({ mode }: { mode: PilotMode }) {
           { id: "WAYPOINTS", label: "Waypoints", disabled: mode !== "WAYPOINTS", title: "Start a mission to fly waypoints" },
         ]}
       />
+      <p className="mt-1.5 text-[11px] text-muted">{auv ? "Let go and it brakes, then drifts: an AUV cannot hover. Hold circles instead." : "Let go and it brakes, then keeps its position, depth and heading."}</p>
       <div className="mt-2 flex flex-wrap items-center gap-4">
         <div className="grid grid-cols-3 gap-1" aria-label="Surge and yaw pad">
           <span />
@@ -226,6 +242,7 @@ function TelemetryGrid() {
           <Row k="Reynolds number (hull)" v={t.reynolds > 0 ? t.reynolds.toExponential(2) : "0"} />
           {vehicle && <Row k="Pilot" v={`${t.pilot.mode}${t.pilot.waypoints ? ` ${Math.min(t.pilot.waypoint, t.pilot.waypoints)}/${t.pilot.waypoints}` : ""}`} />}
           {t.contact && <Row k="Contact" v="hull touching" tone="danger" />}
+          {t.guarded && !t.contact && <Row k="Guard" v="holding off an edge or obstacle" tone="amber" />}
         </div>
         <div>
           <div className="label mb-1 text-[9px] text-dim">Water at the vehicle</div>
