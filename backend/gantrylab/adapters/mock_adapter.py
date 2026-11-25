@@ -40,12 +40,18 @@ class MockAdapter(InferenceAdapter):
         digest = hashlib.sha256(f"{self.seed}:{file}".encode()).digest()
         return np.random.default_rng(int.from_bytes(digest[:8], "little"))
 
+    @staticmethod
+    def _cond(cond: dict, key: str, default: float, hi: float) -> float:
+        """A numeric condition clipped to its physical range; text or missing values use the default."""
+        v = cond.get(key)
+        return float(np.clip(v, 0.0, hi)) if isinstance(v, (int, float)) else default
+
     def predict(self, frame: FrameInput) -> FramePrediction:
         rng = self._rng(frame.file)
         cond = frame.conditions or {}
-        turb = float(cond.get("turbidity", 0.0) or 0.0)
-        light = float(cond.get("lighting", 1.0) if cond.get("lighting") is not None else 1.0)
-        blur = float(cond.get("motion_blur_px", 0.0) or 0.0)
+        turb = self._cond(cond, "turbidity", 0.0, 1.0)
+        light = self._cond(cond, "lighting", 1.0, 1.0)
+        blur = self._cond(cond, "motion_blur_px", 0.0, 100.0)
         dets: list[Detection] = []
         for ann in frame.annotations or []:
             x, y, w, h = ann["bbox_xywh"]
