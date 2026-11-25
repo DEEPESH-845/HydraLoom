@@ -132,8 +132,9 @@ export function FeedRenderer() {
     const { gl, scene, camera } = state;
     const pr = gl.getPixelRatio();
     const canvas = gl.domElement;
-    const fullW = canvas.clientWidth * pr;
-    const fullH = canvas.clientHeight * pr;
+    // three's setViewport and setScissor take CSS pixels and apply the pixel ratio themselves
+    const fullW = canvas.clientWidth;
+    const fullH = canvas.clientHeight;
 
     // interpolated between simulation substeps so the carriage, lamps and feed glide at any display rate
     const pose = useSimStore.getState().engine.renderPose();
@@ -155,7 +156,7 @@ export function FeedRenderer() {
     gl.shadowMap.needsUpdate = true;
     gl.setScissorTest(false);
     gl.setViewport(0, 0, fullW, fullH);
-    waterUniforms.uWaterViewportH.value = fullH;
+    waterUniforms.uWaterViewportH.value = fullH * pr;
     gl.render(scene, camera);
     renderStats.calls = gl.info.render.calls;
     renderStats.triangles = gl.info.render.triangles;
@@ -187,10 +188,10 @@ export function FeedRenderer() {
     const r = f.rect;
     if (r.width < 4 || r.height < 4) return;
     const c = canvas.getBoundingClientRect();
-    const x = Math.round((r.left - c.left) * pr);
-    const y = Math.round((c.bottom - r.bottom) * pr);
-    const w = Math.round(r.width * pr);
-    const h = Math.round(r.height * pr);
+    const x = r.left - c.left;
+    const y = c.bottom - r.bottom;
+    const w = r.width;
+    const h = r.height;
     if (x + w <= 0 || y + h <= 0 || x >= fullW || y >= fullH) return;
 
     feedCam.position.set(wx, CAMERA.lensHeight, wz);
@@ -198,7 +199,7 @@ export function FeedRenderer() {
 
     const mainExposure = labFeedPass();
     gl.setViewport(x, y, w, h);
-    waterUniforms.uWaterViewportH.value = h;
+    waterUniforms.uWaterViewportH.value = h * pr;
     gl.setScissor(x, y, w, h);
     gl.setScissorTest(true);
     // A Color background forces a clear inside the scissor rect, so swap it for the veiling light.
