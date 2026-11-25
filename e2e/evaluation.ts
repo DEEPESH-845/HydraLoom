@@ -114,7 +114,7 @@ export { expect };
 /** The workspace page scrolls inside its own container; the document must never scroll sideways. */
 export async function expectNoHorizontalOverflow(page: Page) {
   const o = await page.evaluate(() => {
-    const shell = document.querySelector<HTMLElement>("[data-testid=model-lab],[data-testid=reports-index],[data-testid=run-report]");
+    const shell = document.querySelector<HTMLElement>("[data-testid=model-lab],[data-testid=reports-index],[data-testid=run-report],[data-testid=benchmark],[data-testid=autonomy],[data-testid=hardware]");
     const doc = document.documentElement.scrollWidth - document.documentElement.clientWidth;
     const own = shell ? shell.scrollWidth - shell.clientWidth : 0;
     // anything wider than the viewport that is not inside a horizontal scroller
