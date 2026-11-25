@@ -1,6 +1,8 @@
 "use client";
 
 import * as THREE from "three";
+import { authHeaders } from "@/lib/api/client";
+import { CONDITION_GRID } from "@/lib/bench/profile";
 import { focalPx, project, type CameraPose } from "@/lib/field/camera";
 import type { FieldEngine } from "@/lib/field/engine";
 import { cross, len, qRotate, type Vec3 } from "@/lib/physics/math";
@@ -32,7 +34,7 @@ import { passControl, targetSync } from "./runtime";
 export const GENERATOR = { app: "gantrylab-web", version: "0.2.0", renderer: `three r${THREE.REVISION}` };
 export const MIN_VISIBLE_PX = 12;
 
-export type CapturePreset = "jitter" | "mission" | "turbidity" | "lighting";
+export type CapturePreset = "jitter" | "mission" | "turbidity" | "lighting" | "grid";
 
 export interface CaptureOptions {
   preset: CapturePreset;
@@ -372,7 +374,6 @@ export function captureFrame(gl: THREE.WebGLRenderer, scene: THREE.Scene, engine
     scene.background = pass.background;
     gl.shadowMap.autoUpdate = false;
     gl.setRenderTarget(ctx.rgb);
-    gl.setViewport(0, 0, W, H);
     gl.clear(true, true, true);
     gl.render(scene, ctx.cam);
     const raw = ctx.read(gl, ctx.rgb);
@@ -385,7 +386,6 @@ export function captureFrame(gl: THREE.WebGLRenderer, scene: THREE.Scene, engine
     // instance ids with occluders, then each visible target alone
     const ids = engine.targets.map((t) => t.id);
     gl.setRenderTarget(ctx.ids);
-    gl.setViewport(0, 0, W, H);
     const all = measure(idPass(gl, scene, ctx, ids, null), W, H, ids.length);
     const annotations: Annotation[] = [];
     const analytic: Record<string, [number, number, number, number]> = {};
@@ -426,7 +426,7 @@ export function captureFrame(gl: THREE.WebGLRenderer, scene: THREE.Scene, engine
     const tel = engine.telemetry();
     const bed = terrainHeight(engine.env.geometry.terrain, pose.position[0], pose.position[2]);
     const vel = engine.vehicle ? tel.speedOverGround : 0;
-    const lateralBlur = engine.platform.camera.exposureS * f * (vel / Math.max(0.2, dist) + (engine.vehicle ? len(engine.vehicle.angularVelocity) : 0));
+    const lateralBlur = engine.conditions.site.exposureS * f * (vel / Math.max(0.2, dist) + (engine.vehicle ? len(engine.vehicle.angularVelocity) : 0));
     const frame: Omit<ManifestFrame, "file"> = {
       width: W,
       height: H,
@@ -452,6 +452,17 @@ export function captureFrame(gl: THREE.WebGLRenderer, scene: THREE.Scene, engine
         altitude_m: round(pose.position[1] - bed, 3),
         vehicle_speed_mps: round(vel, 4),
         motion_blur_px: round(lateralBlur, 3),
+        temperature_c: round(c.site.temperatureC, 2),
+        salinity_psu: round(c.site.salinityPsu, 2),
+        cdom440: round(c.site.cdom440, 4),
+        c_per_ntu: round(c.site.cPerNtu, 3),
+        seabed_reflectance: round(c.site.seabedReflectance, 3),
+        extra_burial: round(c.site.extraBurial, 3),
+        fouling: round(c.site.fouling, 3),
+        sun_elevation_deg: round(c.site.sunElevationDeg, 1),
+        wave_height_m: round(c.site.waveHeightM, 3),
+        layer_ntu: round(c.site.layerNtu, 2),
+        exposure_ms: round(c.site.exposureS * 1000, 3),
         seed,
         frame_index: index,
       },
@@ -502,7 +513,7 @@ export async function runCapture(
   const rand = mulberry32(opts.seed >>> 0);
   const restore = { turbidity: engine.conditions.turbidity, lighting: engine.conditions.lighting, paused: engine.paused };
   const steps = [0, 0.25, 0.5, 0.75, 1];
-  const total = opts.preset === "turbidity" || opts.preset === "lighting" ? steps.length : Math.max(1, Math.min(500, Math.round(opts.frames)));
+  const total = opts.preset === "grid" ? CONDITION_GRID.length * Math.max(1, Math.min(20, Math.round(opts.frames))) : opts.preset === "turbidity" || opts.preset === "lighting" ? steps.length : Math.max(1, Math.min(500, Math.round(opts.frames)));
   const frames: CapturedFrame[] = [];
   engine.paused = true;
   try {
@@ -515,6 +526,10 @@ export async function runCapture(
       else if (opts.preset === "mission") {
         if (i > 0) engine.advance(Math.max(0.1, opts.everyS));
         pose = engine.cameraPose(false);
+      } else if (opts.preset === "grid") {
+        const [turbidity, lighting] = CONDITION_GRID[i % CONDITION_GRID.length];
+        engine.setConditions({ turbidity, lighting });
+        pose = i < CONDITION_GRID.length ? base : jitterPose(base, rand);
       } else {
         const v = opts.preset === "turbidity" ? steps[i] : 0.1 + 0.9 * steps[i];
         engine.setConditions(opts.preset === "turbidity" ? { turbidity: v } : { lighting: v });
@@ -549,7 +564,7 @@ export async function uploadDataset(manifest: Manifest, frames: CapturedFrame[])
   for (const f of frames) form.append("files", f.png, f.frame.file);
   let res: Response;
   try {
-    res = await fetch(`${datasetApiBase()}/api/v1/datasets`, { method: "POST", body: form });
+    res = await fetch(`${datasetApiBase()}/api/v1/datasets`, { method: "POST", body: form, headers: authHeaders() });
   } catch {
     throw new Error(`Backend not reachable at ${datasetApiBase()}. Start it, or save the manifest locally.`);
   }
@@ -599,7 +614,6 @@ export function probeTarget(gl: THREE.WebGLRenderer, scene: THREE.Scene, engine:
     const k = ids.indexOf(id);
     if (k < 0) return { width, height, rendered: null, pixels: 0, analyticModel: null, analyticDeclared: null };
     gl.setScissorTest(false);
-    gl.setViewport(0, 0, width, height);
     const s = measure(idPass(gl, scene, ctx, ids, k), width, height, ids.length)[k];
     const mc = modelCorners(scene, id);
     const t = engine.targets[k];
