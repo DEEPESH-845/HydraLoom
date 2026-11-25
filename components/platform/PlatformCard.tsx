@@ -27,7 +27,7 @@ export function PlatformCard() {
           const cls = clsx("flex min-h-[54px] flex-col items-start border px-2 py-1.5 text-left transition-colors duration-100", on ? "border-teal bg-panel-2" : "border-line hover:border-teal");
           if (id === "gantry")
             return (
-              <Link key={id} href="/lab" className={cls} title="The gantry camera rig runs in the Gantry Lab, the bench-top tank.">
+              <Link key={id} href="/lab" prefetch={false} className={cls} title="The gantry camera rig runs in the Gantry Lab, the bench-top tank.">
                 <span className="text-[12px] text-text">{d.name}</span>
                 <span className="text-[10px] leading-tight text-dim">Lab only, opens /lab</span>
               </Link>

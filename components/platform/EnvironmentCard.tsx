@@ -8,6 +8,8 @@ import { useFieldStore } from "@/lib/field/store";
 import { waterDensity } from "@/lib/physics/seawater";
 import { ENVIRONMENT_LIBRARY, ENVIRONMENT_ORDER, ntuAt } from "@/lib/world/environments";
 import type { FieldEnvironmentId } from "@/lib/world/schema";
+import { effectiveEnv } from "@/lib/field/site";
+import { Checks, Presets, SiteControls } from "./SiteControls";
 import { CardHead, Row, Section, SimTag, Slider, deg, f1, f2 } from "./ui";
 
 const SHORT: Record<string, string> = {
@@ -34,7 +36,7 @@ export function EnvironmentCard() {
           const cls = clsx("flex min-h-[54px] flex-col items-start border px-2 py-1.5 text-left transition-colors duration-100", on ? "border-teal bg-panel-2" : "border-line hover:border-teal");
           if (id === "gantry-lab")
             return (
-              <Link key={id} href="/lab" className={cls} title="The Gantry Lab is the bench-top tank with the XY gantry rig. It opens in its own page.">
+              <Link key={id} href="/lab" prefetch={false} className={cls} title="The Gantry Lab is the bench-top tank with the XY gantry rig. It opens in its own page.">
                 <span className="text-[12px] text-text">{e.name}</span>
                 <span className="text-[10px] leading-tight text-dim">Bench-top rig, opens /lab</span>
               </Link>
@@ -47,9 +49,12 @@ export function EnvironmentCard() {
           );
         })}
       </div>
+      <Presets />
       <WaterFacts />
       <Conditions />
       <CurrentControls />
+      <SiteControls />
+      <Checks />
       <details className="mt-3 border-t border-line pt-3">
         <summary className="label cursor-pointer select-none">Assumptions ({env.assumptions.length})</summary>
         <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-snug text-muted">
@@ -64,7 +69,8 @@ export function EnvironmentCard() {
 
 function WaterFacts() {
   const envId = useFieldStore((s) => s.envId);
-  const env = ENVIRONMENT_LIBRARY[envId];
+  const site = useFieldStore((s) => s.conditions.site);
+  const env = effectiveEnv(ENVIRONMENT_LIBRARY[envId], site);
   const { turbidity, vis, density } = useFieldStore(useShallow((s) => ({ turbidity: s.conditions.turbidity, vis: s.telemetry.visibilityM, density: s.telemetry.densityKgM3 })));
   const ntu = ntuAt(env, turbidity);
   const rhoSurface = waterDensity({ temperatureC: env.water.temperatureC, salinityPsu: env.water.salinityPsu, depthM: 0 });
@@ -80,7 +86,7 @@ function WaterFacts() {
         <Row k="Visibility (2% contrast)" v={f1(vis)} unit="m" tone="teal" />
         <Row k="Light source" v={env.light.source === "lamp" ? "Vehicle lamps only" : "Daylight from the surface"} />
         <Row k="Depth (seabed / operating)" v={`${f1(env.geometry.terrain.depthM)} / ${f1(env.operatingDepthM)}`} unit="m" />
-        {env.water.stratification && <Row k="Thermocline" v={`${f1(env.water.stratification.depthM)} m, +${env.water.stratification.extraNtu} NTU`} />}
+        {env.water.stratification && env.water.stratification.extraNtu > 0 && <Row k="Turbid layer" v={`${f1(env.water.stratification.depthM)} m, +${env.water.stratification.extraNtu} NTU`} />}
       </div>
     </Section>
   );
