@@ -216,3 +216,19 @@ def test_size_slice_coco_ignore_semantics():
     assert small["recall"] == 0.0 and small["n_gt"] == 1
     assert small["fp"] == 1  # the small unmatched prediction counts against the small range
     assert large["recall"] == 1.0 and large["precision"] == 1.0  # small FP ignored in the large range
+
+
+def test_condition_cells_are_joint_and_add_up():
+    hit = dict(gt=[("A", (0, 0, 10, 10))], preds=[("A", (0, 0, 10, 10), 0.9)])
+    miss = dict(gt=[("A", (0, 0, 10, 10))], preds=[("A", (50, 50, 60, 60), 0.9)])
+    frames = [
+        fr(**hit, conditions={"turbidity": 0.05, "lighting": 0.8}),
+        fr(**miss, conditions={"turbidity": 0.05, "lighting": 0.2}),
+        fr(**miss, conditions={"turbidity": 0.65, "lighting": 0.8}),
+        fr(**hit, conditions={"turbidity": 0.65}),  # no lighting recorded: in no joint cell
+    ]
+    cells = {(c["turbidity"], c["lighting"]): c for c in evaluate(frames, ["A"], conf=0.25)["condition_cells"]}
+    assert set(cells) == {("clear", "bright"), ("clear", "dark"), ("heavy", "bright")}
+    assert (cells["clear", "bright"]["tp"], cells["clear", "bright"]["fp"], cells["clear", "bright"]["fn"]) == (1, 0, 0)
+    assert (cells["clear", "dark"]["tp"], cells["clear", "dark"]["fp"], cells["clear", "dark"]["fn"]) == (0, 1, 1)
+    assert sum(c["n_gt"] for c in cells.values()) == 3

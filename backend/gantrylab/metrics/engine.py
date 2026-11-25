@@ -637,6 +637,25 @@ def condition_slices(frames: list[dict], classes: list[str], table50: MatchTable
     return out
 
 
+def condition_cells(frames: list[dict], table50: MatchTable, conf: float) -> list[dict]:
+    """Joint turbidity x lighting counts. Marginal slices cannot say which model wins in dark AND silty water."""
+    groups: dict[tuple[str, str], list[int]] = {}
+    for fi, fr in enumerate(frames):
+        cond = fr.get("conditions") or {}
+        t = condition_bucket("turbidity", cond.get("turbidity"))
+        li = condition_bucket("lighting", cond.get("lighting"))
+        if t is not None and li is not None:
+            groups.setdefault((t.label, li.label), []).append(fi)
+    out: list[dict] = []
+    for (t, li), fidx in sorted(groups.items()):
+        mask = np.zeros(len(frames), dtype=bool)
+        mask[fidx] = True
+        ov = summarise(table50.subset(mask), conf, with_coco=False)["overall"]
+        out.append({"turbidity": t, "lighting": li, "n_frames": len(fidx), "n_gt": ov["n_gt"], "tp": ov["tp"],
+                    "fp": ov["fp"], "fn": ov["fn"]})
+    return out
+
+
 def attribute_slices(frames: list[dict], classes: list[str], conf: float) -> list[dict]:
     """Object-attribute slices.
 
@@ -780,6 +799,7 @@ def evaluate(frames: list[dict], classes: list[str], conf: float) -> dict[str, A
         "pr": curves,
         **cf,
         "slices": slices,
+        "condition_cells": condition_cells(frames, table50, conf),
         "slice_ranking": rank_slices(slices),
         "sensitivity": sensitivity(cslices),
     }
